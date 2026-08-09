@@ -10,6 +10,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::Read;
+use std::path::Path;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -35,23 +36,32 @@ fn startup_error(state: tauri::State<'_, StartupError>) -> Option<String> {
 
 /// Bring the Claude desktop app to the session a message came from.
 ///
-/// `claude://resume?session=<id>` is how the app's own notifications get you
-/// back to a session. It is idempotent — a session already imported resolves to
-/// the same `local_<id>` rather than a second copy — so clicking twice focuses
-/// rather than duplicates.
+/// `claude://resume?session=<id>` is the only externally reachable way in, but
+/// it resolves `local_<id>` and *imports* whatever it finds. Hand it the id a
+/// hook reports and it matches no live session, so it copies the transcript
+/// into a second, untitled session — the "General coding session" you land in —
+/// and strips thinking blocks from the original JSONL on the way through.
 ///
-/// It is also a private, undocumented interface found by reading the app
-/// bundle, so treat failure as normal: any Claude update may change it, and the
-/// caller falls back to copying the resume command.
+/// Handing it the desktop session's own id instead takes the app's
+/// "already imported" path, which focuses the live session and touches nothing.
+/// So resolve first, and fall back to the reported id only when there is no
+/// desktop session to focus.
 ///
-/// The id arrives over HTTP from whatever posted the event, so it is checked
-/// against the UUID shape before going anywhere near a URL.
+/// This is a private, undocumented interface found by reading the app bundle,
+/// so treat failure as normal: any Claude update may change it.
+///
+/// The id arrives over HTTP from whatever posted the event, so both it and
+/// anything resolved from it are checked against the UUID shape before going
+/// anywhere near a URL.
 #[tauri::command]
 fn focus_session(session: String) -> Result<(), String> {
     if !is_session_id(&session) {
         return Err("not a session id".into());
     }
-    let url = format!("claude://resume?session={session}");
+    let target = desktop_session_for(&session)
+        .filter(|id| is_session_id(id))
+        .unwrap_or(session);
+    let url = format!("claude://resume?session={target}");
 
     #[cfg(target_os = "macos")]
     {
@@ -66,6 +76,60 @@ fn focus_session(session: String) -> Result<(), String> {
         let _ = url;
         Err("only wired up for macOS so far".into())
     }
+}
+
+/// The id a hook reports is not the id the desktop app files the session under.
+/// A stored record pairs them, and the two uuids differ:
+///
+/// ```json
+/// {"sessionId": "local_bfb84bd4-…", "cliSessionId": "c247fe2e-…", "title": "…"}
+/// ```
+///
+/// Given the `cliSessionId`, return the `sessionId` without its `local_` prefix,
+/// which is the form the deep link wants. `None` for a session with no desktop
+/// record — one run purely in a terminal — where importing is the only way in.
+fn desktop_session_for(cli_session: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let claude = Path::new(&home).join("Library/Application Support/Claude");
+    // Claude Code and Cowork keep separate stores of the same record shape.
+    ["claude-code-sessions", "local-agent-mode-sessions"]
+        .iter()
+        .find_map(|store| find_session_record(&claude.join(store), cli_session, 2))
+}
+
+/// Records sit at `<store>/<account>/<workspace>/local_<uuid>.json`, so two
+/// levels of directory is enough to reach them.
+fn find_session_record(dir: &Path, cli_session: &str, depth: u8) -> Option<String> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth > 0 {
+                if let Some(found) = find_session_record(&path, cli_session, depth - 1) {
+                    return Some(found);
+                }
+            }
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("local_") || !name.ends_with(".json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if record.get("cliSessionId").and_then(|v| v.as_str()) != Some(cli_session) {
+            continue;
+        }
+        if let Some(id) = record.get("sessionId").and_then(|v| v.as_str()) {
+            return Some(id.strip_prefix("local_").unwrap_or(id).to_string());
+        }
+    }
+    None
 }
 
 /// 8-4-4-4-12 hex, the shape Claude Code session ids come in.
@@ -308,5 +372,84 @@ mod tests {
         ] {
             assert!(!is_session_id(bad), "should reject {bad:?}");
         }
+    }
+
+    /// Build a throwaway store laid out like the app's:
+    /// `<store>/<account>/<workspace>/local_<uuid>.json`.
+    fn fixture(name: &str, records: &[(&str, &str)]) -> std::path::PathBuf {
+        let store = std::env::temp_dir().join(format!("deskmate-test-{name}"));
+        let leaf = store.join("account-1").join("workspace-1");
+        let _ = std::fs::remove_dir_all(&store);
+        std::fs::create_dir_all(&leaf).unwrap();
+        for (session_id, cli_session_id) in records {
+            std::fs::write(
+                leaf.join(format!("{session_id}.json")),
+                format!(r#"{{"sessionId":"{session_id}","cliSessionId":"{cli_session_id}"}}"#),
+            )
+            .unwrap();
+        }
+        store
+    }
+
+    #[test]
+    fn resolves_a_cli_id_to_the_desktop_session_that_owns_it() {
+        // The pairing this whole thing turns on: the two ids are different
+        // uuids, and only the desktop one focuses instead of importing a copy.
+        let store = fixture(
+            "resolve",
+            &[
+                (
+                    "local_9b7595e0-f942-4438-9028-262e4dfb2c2e",
+                    "a640dcf5-b8f7-4b79-bfeb-08334f9ad7e9",
+                ),
+                (
+                    "local_bfb84bd4-b900-41b7-8c45-efdcfa7d653b",
+                    "c247fe2e-aaa2-4084-98b1-ddc4acc461e0",
+                ),
+            ],
+        );
+
+        assert_eq!(
+            find_session_record(&store, "c247fe2e-aaa2-4084-98b1-ddc4acc461e0", 2),
+            Some("bfb84bd4-b900-41b7-8c45-efdcfa7d653b".to_string()),
+            "should return the desktop id, without its local_ prefix"
+        );
+        // A terminal-only session has no record; the caller falls back to
+        // importing, which is the only way into one of those.
+        assert_eq!(
+            find_session_record(&store, "00000000-0000-4000-8000-000000000000", 2),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    #[test]
+    fn survives_junk_in_the_store() {
+        // Real stores hold caches and settings next to session records.
+        let store = fixture(
+            "junk",
+            &[(
+                "local_bfb84bd4-b900-41b7-8c45-efdcfa7d653b",
+                "c247fe2e-aaa2-4084-98b1-ddc4acc461e0",
+            )],
+        );
+        let leaf = store.join("account-1").join("workspace-1");
+        std::fs::write(leaf.join("local_broken.json"), "{not json").unwrap();
+        std::fs::write(leaf.join("scheduled-tasks.json"), r#"{"a":1}"#).unwrap();
+        std::fs::write(leaf.join("local_no-fields.json"), "{}").unwrap();
+
+        assert_eq!(
+            find_session_record(&store, "c247fe2e-aaa2-4084-98b1-ddc4acc461e0", 2),
+            Some("bfb84bd4-b900-41b7-8c45-efdcfa7d653b".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    #[test]
+    fn missing_store_is_not_an_error() {
+        assert_eq!(
+            find_session_record(Path::new("/nonexistent/deskmate"), "whatever", 2),
+            None
+        );
     }
 }

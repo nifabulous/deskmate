@@ -75,14 +75,31 @@ while it is shut waits there, and a small count sits on the pet's shoulder
 so you know how much. Opening gives everything a fresh 45 seconds before it
 fades, so a burst that landed while you were away is still readable.
 
-**Click a message title** to jump to the session it came from. This works
-for Claude Code sessions running in the Claude desktop app, which is
-reached with `claude://resume?session=<id>` — the same route the app's own
-notifications use, and idempotent, so clicking twice focuses the session
-rather than making a second copy of it. That URL is a private, undocumented
-interface, so treat it as best-effort: a Claude update could change it, and
-deskmate says so in a bubble rather than failing silently. Titles are only
-clickable when the message carries a Claude Code session id.
+**Click a message title** to jump to the session it came from, if it is a
+Claude Code session in the Claude desktop app.
+
+The only externally reachable entry point is `claude://resume?session=<id>`,
+and it *imports* rather than focuses. The id a hook reports is not the id
+the app files the session under — a stored record pairs them, and the two
+uuids differ:
+
+```json
+{"sessionId": "local_bfb84bd4-…", "cliSessionId": "c247fe2e-…", "title": "…"}
+```
+
+Passing the hook's id matches no live session, so the app copies the
+transcript into a second, untitled session — one that shows up as "General
+coding session" — and strips thinking blocks from the original JSONL on the
+way through. deskmate therefore looks the session up first and passes the
+desktop id, which takes the app's "already imported" path: it focuses the
+live session and leaves the transcript alone. A session with no desktop
+record (one run purely in a terminal) still falls back to importing, since
+that is the only way into one of those.
+
+That URL is a private, undocumented interface, so treat it as best-effort:
+a Claude update could change it, and deskmate says so in a bubble rather
+than failing silently. Titles are only clickable when the message carries a
+Claude Code session id.
 
 **Drag** the pet anywhere on screen; it starts near the bottom-right corner.
 **Right-click** to switch creatures — v0.1 ships an owl and a cat, and the
