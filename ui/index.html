@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>deskmate</title>
+<style>
+  :root {
+    --bubble-bg: rgba(28, 28, 30, 0.92);
+    --bubble-fg: #f2f2f2;
+    --bubble-dim: #a8a8ad;
+    --bubble-err: #ff6b5e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: -apple-system, "Segoe UI", Ubuntu, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+  #bubbles {
+    position: absolute;
+    top: 8px; left: 8px; right: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .bubble {
+    background: var(--bubble-bg);
+    color: var(--bubble-fg);
+    border-radius: 14px;
+    padding: 8px 12px;
+    font-size: 12px;
+    line-height: 1.35;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    animation: pop 160ms ease-out;
+    overflow: hidden;
+  }
+  .bubble .title { font-weight: 600; }
+  .bubble .detail {
+    color: var(--bubble-dim);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .bubble.error .title { color: var(--bubble-err); }
+  .bubble.fading { opacity: 0; transition: opacity 600ms ease; }
+  @keyframes pop {
+    from { transform: translateY(6px) scale(0.96); opacity: 0; }
+    to   { transform: none; opacity: 1; }
+  }
+  #stage {
+    position: absolute;
+    left: 0; right: 0; bottom: 6px;
+    display: flex;
+    justify-content: center;
+  }
+  #pet { image-rendering: pixelated; }
+</style>
+</head>
+<body data-tauri-drag-region>
+  <div id="bubbles" data-tauri-drag-region></div>
+  <div id="stage" data-tauri-drag-region>
+    <canvas id="pet" width="160" height="176" data-tauri-drag-region></canvas>
+  </div>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------- sprites
+   Frames are plain string grids so anyone can redraw the pet in a text
+   editor. 16 columns per row. Palette keys below.                      */
+
+const PALETTE = {
+  "O": "#e88e3c", // body
+  "D": "#8a4b1d", // outline / dark feathers
+  "W": "#f8f4ec", // eyes, belly
+  "B": "#2b1d14", // pupils
+  "Y": "#f0c450", // beak, feet
+  ".": null,      // transparent
+};
+
+const EYES_OPEN = [
+  "....DD....DD....",
+  "...DODD..DDOD...",
+  "..DOOODDDDOOOD..",
+  ".DOOOOOOOOOOOOD.",
+  ".DOWWWDOODWWWOD.",
+  ".DOWBWDOODWBWOD.",
+  ".DOWWWDOODWWWOD.",
+  ".DOOODDYYDDOOOD.",
+  ".DOOOODYYDOOOOD.",
+  ".DODOOOOOOOODOD.",
+  ".DODOWWWWWWODOD.",
+  ".DODOWWWWWWODOD.",
+  "..DODWWWWWWDOD..",
+  "..DOODWWWWDOOD..",
+  "...DOOODDOOOD...",
+  "....DDDYYDDD....",
+];
+
+// Same owl, eyes shut.
+const EYES_CLOSED = EYES_OPEN.slice();
+EYES_CLOSED[4] = ".DOOOODOODOOOOD.";
+EYES_CLOSED[5] = ".DODDDDOODDDDOD.";
+EYES_CLOSED[6] = ".DOOOODOODOOOOD.";
+
+// Wings out — alternated with the base frame while working.
+const WINGS_OUT = EYES_OPEN.slice();
+WINGS_OUT[9]  = "DODOOOOOOOOOODOD";
+WINGS_OUT[10] = "DODOWWWWWWWWODOD";
+WINGS_OUT[11] = ".DODOWWWWWWODOD.";
+
+const FRAMES = {
+  idle: EYES_OPEN,
+  blink: EYES_CLOSED,
+  workA: EYES_OPEN,
+  workB: WINGS_OUT,
+  sleep: EYES_CLOSED,
+};
+
+/* ------------------------------------------------------------- rendering */
+
+const canvas = document.getElementById("pet");
+const ctx = canvas.getContext("2d");
+const SCALE = 9;          // 16px grid -> 144px sprite
+const GRID = 16;
+
+function drawFrame(frame, bobY) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const originX = Math.floor((canvas.width - GRID * SCALE) / 2);
+  const originY = canvas.height - GRID * SCALE - 8 + bobY;
+
+  // soft ground shadow
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.beginPath();
+  ctx.ellipse(canvas.width / 2, canvas.height - 8, 52, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (let y = 0; y < frame.length; y++) {
+    const row = frame[y];
+    for (let x = 0; x < row.length; x++) {
+      const color = PALETTE[row[x]];
+      if (!color) continue;
+      ctx.fillStyle = color;
+      ctx.fillRect(originX + x * SCALE, originY + y * SCALE, SCALE, SCALE);
+    }
+  }
+}
+
+function drawZzz(t) {
+  ctx.fillStyle = "rgba(240,240,245,0.85)";
+  ctx.font = "600 14px monospace";
+  const phase = Math.floor(t / 700) % 3;
+  for (let i = 0; i <= phase; i++) {
+    ctx.fillText("z", canvas.width / 2 + 44 + i * 10, 46 - i * 12);
+  }
+}
+
+/* ---------------------------------------------------------- pet behavior */
+
+const SLEEP_AFTER_MS = 5 * 60 * 1000;
+
+const pet = {
+  mode: "idle",            // idle | working | attention | sleeping
+  lastEventAt: Date.now(),
+  blinkUntil: 0,
+  nextBlinkAt: Date.now() + 2500,
+  shakeUntil: 0,
+  hopUntil: 0,
+};
+
+function tick(now) {
+  let frame = FRAMES.idle;
+  let bob = Math.round(Math.sin(now / 900) * 2);
+  let shakeX = 0;
+
+  if (pet.mode !== "sleeping" && now - pet.lastEventAt > SLEEP_AFTER_MS) {
+    pet.mode = "sleeping";
+  }
+
+  if (pet.mode === "working") {
+    frame = Math.floor(now / 280) % 2 ? FRAMES.workB : FRAMES.workA;
+    bob = Math.round(Math.sin(now / 260) * 2);
+  } else if (pet.mode === "sleeping") {
+    frame = FRAMES.sleep;
+    bob = Math.round(Math.sin(now / 1600) * 1);
+  } else {
+    if (now > pet.nextBlinkAt) {
+      pet.blinkUntil = now + 140;
+      pet.nextBlinkAt = now + 2200 + Math.random() * 3800;
+    }
+    if (now < pet.blinkUntil) frame = FRAMES.blink;
+  }
+
+  if (now < pet.hopUntil) {
+    bob -= Math.abs(Math.round(Math.sin(now / 90) * 8));
+  }
+  if (now < pet.shakeUntil) {
+    shakeX = Math.round(Math.sin(now / 40) * 3);
+  }
+
+  ctx.save();
+  ctx.translate(shakeX, 0);
+  drawFrame(frame, bob);
+  if (pet.mode === "sleeping") drawZzz(now);
+  ctx.restore();
+
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+/* ---------------------------------------------------------------- bubbles */
+
+const bubblesEl = document.getElementById("bubbles");
+const MAX_BUBBLES = 3;
+const BUBBLE_TTL_MS = 45 * 1000;
+
+function showBubble({ title, detail, error }) {
+  const el = document.createElement("div");
+  el.className = "bubble" + (error ? " error" : "");
+  el.setAttribute("data-tauri-drag-region", "");
+  if (title) {
+    const t = document.createElement("div");
+    t.className = "title";
+    t.textContent = title;
+    t.setAttribute("data-tauri-drag-region", "");
+    el.appendChild(t);
+  }
+  if (detail) {
+    const d = document.createElement("div");
+    d.className = "detail";
+    d.textContent = detail;
+    d.setAttribute("data-tauri-drag-region", "");
+    el.appendChild(d);
+  }
+  bubblesEl.prepend(el);
+  while (bubblesEl.children.length > MAX_BUBBLES) {
+    bubblesEl.removeChild(bubblesEl.lastChild);
+  }
+  setTimeout(() => {
+    el.classList.add("fading");
+    setTimeout(() => el.remove(), 700);
+  }, BUBBLE_TTL_MS);
+}
+
+/* ------------------------------------------------------------ event intake
+   Events arrive from the Rust side over the `deskmate:event` channel.
+   Schema: docs/PROTOCOL.md                                              */
+
+function wake() {
+  if (pet.mode === "sleeping") pet.mode = "idle";
+  pet.lastEventAt = Date.now();
+}
+
+function handleEvent(e) {
+  wake();
+  const kind = e.kind || "status";
+  const title = e.title || "";
+  const detail = e.detail || "";
+
+  switch (kind) {
+    case "task_start":
+      pet.mode = "working";
+      showBubble({ title: title || "Working…", detail });
+      break;
+    case "tool_use":
+      pet.mode = "working";
+      // Tool events are frequent; only bubble when there is a title.
+      if (title) showBubble({ title, detail });
+      break;
+    case "task_done":
+      pet.mode = "idle";
+      pet.hopUntil = Date.now() + 700;
+      showBubble({ title: title || "Done", detail });
+      break;
+    case "error":
+      pet.mode = "idle";
+      pet.shakeUntil = Date.now() + 900;
+      showBubble({ title: title || "Something went wrong", detail, error: true });
+      break;
+    case "notify":
+      pet.shakeUntil = Date.now() + 500;
+      showBubble({ title: title || "Notification", detail });
+      break;
+    default:
+      if (title || detail) showBubble({ title, detail });
+  }
+}
+
+if (window.__TAURI__) {
+  window.__TAURI__.event.listen("deskmate:event", (msg) => {
+    try { handleEvent(msg.payload || {}); } catch (err) { console.error(err); }
+  });
+} else {
+  // Opened in a plain browser (development): demo loop so the pet is alive.
+  console.log("deskmate: no Tauri bridge, running demo mode");
+  const demo = [
+    { kind: "task_start", title: "Review PR #104", detail: "Reading the diff and checking tests…" },
+    { kind: "tool_use", title: "Running tests", detail: "npm test" },
+    { kind: "task_done", title: "Review PR #104", detail: "Left 3 comments." },
+  ];
+  let i = 0;
+  setInterval(() => handleEvent(demo[i++ % demo.length]), 4000);
+}
+</script>
+</body>
+</html>
