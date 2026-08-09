@@ -26,8 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pet timer regression test
-        run: node test/pet-timers.test.js
+      - name: UI regression tests
+        run: |
+          node test/pet-timers.test.js
+          node test/focus-session.test.js
 
       - name: Tag matches the version in tauri.conf.json
         if: startsWith(github.ref, 'refs/tags/v')
@@ -90,11 +92,12 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.target }}
 
-      - name: Formatting and lints
+      - name: Formatting, lints, and Rust tests
         working-directory: src-tauri
         run: |
           cargo fmt --check
-          cargo clippy -- -D warnings
+          cargo clippy --all-targets -- -D warnings
+          cargo test
 
       - uses: tauri-apps/tauri-action@v0
         env:

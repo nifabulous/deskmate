@@ -27,11 +27,21 @@ against a controlled clock, with no browser and no dependencies:
 
 ```sh
 node test/pet-timers.test.js
+node test/focus-session.test.js
 ```
 
-Run it after touching the animation loop. Timing bugs there are invisible
-by eye — a wrong clock source once left the pet unable to blink or sleep
-while everything still looked fine on screen.
+Run them after touching the animation loop or the message panel. Timing
+bugs are invisible by eye — a wrong clock source once left the pet unable
+to blink or sleep while everything still looked fine on screen — and the
+click test pins down which titles are clickable and that a clickable one
+stops being a drag region, which is otherwise easy to break by accident.
+
+The Rust side has its own tests, including the check that keeps a session
+id arriving over HTTP from steering the `claude://` URL somewhere else:
+
+```sh
+cd src-tauri && cargo test
+```
 
 ## 3. The app shell
 

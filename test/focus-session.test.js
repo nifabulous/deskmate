@@ -1,0 +1,113 @@
+// Regression test for clicking a message title to jump to its session.
+//
+//   node test/focus-session.test.js
+//
+// Only Claude Code messages carrying a session id are clickable: the deep link
+// behind this resolves a Claude session id, which means nothing for an opencode
+// run or a shell script. A title that is clickable must also drop its
+// drag-region attribute, or pressing it starts a window drag instead.
+//
+// Runs the real ui/index.html against a stubbed DOM and a stubbed Tauri bridge
+// that records invoke() calls, so the whole chain is exercised without the app.
+
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+
+const UI = path.join(__dirname, "..", "ui", "index.html");
+
+const created = [];
+const invokes = [];
+
+function makeNode() {
+  const node = {
+    className: "", textContent: "", title: "", children: [], style: { setProperty() {} },
+    _attrs: new Set(), _handlers: {},
+    classList: {
+      add(c) { node.className += (node.className ? " " : "") + c; },
+      contains(c) { return node.className.split(" ").includes(c); },
+    },
+    setAttribute(k) { node._attrs.add(k); },
+    hasAttribute(k) { return node._attrs.has(k); },
+    addEventListener(ev, fn) { (node._handlers[ev] ||= []).push(fn); },
+    click() { (node._handlers.click || []).forEach((fn) => fn({ stopPropagation() {} })); },
+    appendChild(c) { node.children.push(c); c.parentNode = node; },
+    prepend(c) { node.children.unshift(c); c.parentNode = node; },
+    removeChild(c) { node.children = node.children.filter((x) => x !== c); },
+    remove() { if (node.parentNode) node.parentNode.removeChild(node); },
+    querySelector() { return null; },
+    getContext: () => ctxStub,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 84, height: 90 }),
+    width: 84, height: 90, scrollHeight: 0, clientHeight: 0,
+  };
+  created.push(node);
+  return node;
+}
+
+const ctxStub = new Proxy({}, { get: () => () => {}, set: () => true });
+
+const html = fs.readFileSync(UI, "utf8");
+let code = html.slice(html.indexOf("<script>") + 8, html.lastIndexOf("</script>"));
+code = code.replace(/requestAnimationFrame\(tick\);/g, "");
+
+const sandbox = {
+  console: { log() {}, error() {} },
+  Math,
+  setTimeout: () => 0,
+  setInterval: () => 0,
+  requestAnimationFrame: () => 0,
+  addEventListener: () => {},
+  localStorage: { getItem: () => null, setItem() {} },
+  document: { getElementById: makeNode, createElement: makeNode, body: makeNode() },
+  __TAURI__: {
+    core: {
+      invoke(name, args) {
+        invokes.push({ name, args });
+        return Promise.resolve(null);
+      },
+    },
+    event: { listen: () => Promise.resolve(() => {}) },
+  },
+};
+sandbox.window = sandbox;
+vm.createContext(sandbox);
+vm.runInContext(code, sandbox);
+
+const failures = [];
+function check(name, actual, expected) {
+  const ok = actual === expected;
+  console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok ? "" : ` — got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`}`);
+  if (!ok) failures.push(name);
+}
+
+const SESSION = "c247fe2e-aaa2-4084-98b1-ddc4acc461e0";
+const titleFor = (text) => created.find((n) => n.textContent === text && n.className.includes("title"));
+
+sandbox.handleEvent({ kind: "tool_use", source: "claude-code", session: SESSION, title: "Claude Code msg", detail: "x" });
+sandbox.handleEvent({ kind: "tool_use", source: "opencode", session: "run-9c71", title: "opencode msg", detail: "x" });
+sandbox.handleEvent({ kind: "tool_use", source: "claude-code", title: "No session", detail: "x" });
+
+const claudeTitle = titleFor("Claude Code msg");
+const opencodeTitle = titleFor("opencode msg");
+const noSessionTitle = titleFor("No session");
+
+check("a Claude Code message with a session is clickable", claudeTitle.classList.contains("linked"), true);
+check("an opencode message is not clickable", opencodeTitle.classList.contains("linked"), false);
+check("a Claude Code message with no session is not clickable", noSessionTitle.classList.contains("linked"), false);
+
+// A clickable title must not also be a drag region, or the press becomes a drag.
+check("clickable title is not a drag region", claudeTitle.hasAttribute("data-tauri-drag-region"), false);
+check("non-clickable title stays a drag region", opencodeTitle.hasAttribute("data-tauri-drag-region"), true);
+
+invokes.length = 0;
+claudeTitle.click();
+const call = invokes.find((c) => c.name === "focus_session");
+check("clicking invokes focus_session", !!call, true);
+check("and passes the session id through unchanged", call && call.args.session, SESSION);
+
+invokes.length = 0;
+opencodeTitle.click();
+check("clicking a non-clickable title does nothing", invokes.length, 0);
+
+console.log(failures.length ? `\n${failures.length} failing` : "\nall passing");
+process.exit(failures.length ? 1 : 0);

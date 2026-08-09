@@ -75,6 +75,15 @@ while it is shut waits there, and a small count sits on the pet's shoulder
 so you know how much. Opening gives everything a fresh 45 seconds before it
 fades, so a burst that landed while you were away is still readable.
 
+**Click a message title** to jump to the session it came from. This works
+for Claude Code sessions running in the Claude desktop app, which is
+reached with `claude://resume?session=<id>` — the same route the app's own
+notifications use, and idempotent, so clicking twice focuses the session
+rather than making a second copy of it. That URL is a private, undocumented
+interface, so treat it as best-effort: a Claude update could change it, and
+deskmate says so in a bubble rather than failing silently. Titles are only
+clickable when the message carries a Claude Code session id.
+
 **Drag** the pet anywhere on screen; it starts near the bottom-right corner.
 **Right-click** to switch creatures — v0.1 ships an owl and a cat, and the
 choice is remembered. Clicks land on the pet and the open panel; the rest of
@@ -98,24 +107,11 @@ rebuild, which needs a Rust toolchain just to pick up a bugfix. In order:
 
 **Everything else.**
 
-- Click a message to jump to the session that sent it. Blocked on a way
-  to focus a session, and the answer differs by how the agent is run:
-
-  - **In a terminal** this is doable now. The hook can capture
-    `$TERM_PROGRAM` plus `$ITERM_SESSION_ID` / `$TERM_SESSION_ID` and
-    send them with the event; focusing that tab is then a few lines of
-    AppleScript on macOS.
-  - **In the Claude desktop app** there is nothing to focus. None of
-    those variables are set, and the app's only relevant URL route,
-    `claude://resume`, imports a transcript into a new view rather than
-    focusing an already-open tab — its own error strings say so
-    (`code_deeplink_resume_import_failed`). The parameter format is
-    undocumented.
-
-  So this waits on a supported "focus this session" entry point. The
-  session id, `transcript_path`, and `cwd` already arrive with every
-  event, so the pet end is ready whenever the other end exists.
-
+- Jump to a session from a terminal-run agent. Clicking a title already
+  works for the Claude desktop app (see above); a terminal-run session
+  would need the hook to capture `$TERM_PROGRAM` plus
+  `$ITERM_SESSION_ID` / `$TERM_SESSION_ID` and focus that tab with
+  AppleScript.
 - Transcript watcher: tail session logs (e.g. Claude Code JSONL) for
   tools with no hook system, zero per-tool setup
 - MCP server mode, so agents can talk to the pet as a tool

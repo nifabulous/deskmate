@@ -119,6 +119,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Clickable when we know how to get back to the session it came from. */
+  .bubble .title.linked { cursor: pointer; }
+  .bubble .title.linked:hover { text-decoration: underline; }
   .bubble .detail {
     color: var(--bubble-dim);
     display: -webkit-box;
@@ -478,9 +481,25 @@ function laneOf(source, session) {
   };
 }
 
+/* Clicking a title goes back to the session that sent it. Only Claude Code
+   sessions can be reached: the deep link behind this resolves a Claude session
+   id, which is meaningless for opencode or a shell script. */
+function canFocus(source, session) {
+  return !!window.__TAURI__ && source === "claude-code" && !!session;
+}
+
+function focusSession(session) {
+  window.__TAURI__.core.invoke("focus_session", { session }).catch(() => {
+    // Private interface on the Claude side — if it ever stops working, say so
+    // rather than leaving a click that silently does nothing.
+    showBubble({ title: "Could not open that session", detail: session });
+  });
+}
+
 function showBubble({ title, detail, error, source, session }) {
   messages.push({
-    title, detail, error: !!error,
+    title, detail, error: !!error, session,
+    focusable: canFocus(source, session),
     lane: laneOf(source, session),
     expiresAt: Date.now() + MESSAGE_TTL_MS,
   });
@@ -524,7 +543,18 @@ function buildBubble(m) {
     const t = document.createElement("div");
     t.className = "title";
     t.textContent = m.title || "";
-    t.setAttribute("data-tauri-drag-region", "");
+    if (m.focusable) {
+      // No drag region here, so a press on the title is a click rather than the
+      // start of a window drag.
+      t.classList.add("linked");
+      t.title = "Open this session in Claude";
+      t.addEventListener("click", (e) => {
+        e.stopPropagation();
+        focusSession(m.session);
+      });
+    } else {
+      t.setAttribute("data-tauri-drag-region", "");
+    }
     head.appendChild(t);
     if (m.lane) {
       const lane = document.createElement("div");

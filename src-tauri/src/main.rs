@@ -33,6 +33,54 @@ fn startup_error(state: tauri::State<'_, StartupError>) -> Option<String> {
     state.0.lock().ok()?.clone()
 }
 
+/// Bring the Claude desktop app to the session a message came from.
+///
+/// `claude://resume?session=<id>` is how the app's own notifications get you
+/// back to a session. It is idempotent — a session already imported resolves to
+/// the same `local_<id>` rather than a second copy — so clicking twice focuses
+/// rather than duplicates.
+///
+/// It is also a private, undocumented interface found by reading the app
+/// bundle, so treat failure as normal: any Claude update may change it, and the
+/// caller falls back to copying the resume command.
+///
+/// The id arrives over HTTP from whatever posted the event, so it is checked
+/// against the UUID shape before going anywhere near a URL.
+#[tauri::command]
+fn focus_session(session: String) -> Result<(), String> {
+    if !is_session_id(&session) {
+        return Err("not a session id".into());
+    }
+    let url = format!("claude://resume?session={session}");
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        Err("only wired up for macOS so far".into())
+    }
+}
+
+/// 8-4-4-4-12 hex, the shape Claude Code session ids come in.
+fn is_session_id(s: &str) -> bool {
+    let groups = [8, 4, 4, 4, 12];
+    let mut parts = s.split('-');
+    for len in groups {
+        match parts.next() {
+            Some(p) if p.len() == len && p.bytes().all(|b| b.is_ascii_hexdigit()) => {}
+            _ => return false,
+        }
+    }
+    parts.next().is_none()
+}
+
 /// Where the pet sits inside the window, in logical pixels, as measured and
 /// reported by the webview. Everything outside it is made click-through.
 #[derive(Default)]
@@ -179,7 +227,11 @@ fn main() {
     tauri::Builder::default()
         .manage(StartupError::default())
         .manage(HitRegion::default())
-        .invoke_handler(tauri::generate_handler![startup_error, set_hit_region])
+        .invoke_handler(tauri::generate_handler![
+            startup_error,
+            set_hit_region,
+            focus_session
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             thread::spawn(move || run_event_server(handle));
@@ -228,4 +280,33 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running deskmate");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_a_real_session_id() {
+        assert!(is_session_id("c247fe2e-aaa2-4084-98b1-ddc4acc461e0"));
+        assert!(is_session_id("00000000-0000-4000-8000-000000000000"));
+    }
+
+    #[test]
+    fn rejects_anything_that_is_not_one() {
+        // Events arrive from any local process, so this is the gate that keeps a
+        // hostile `session` from steering the URL somewhere else.
+        for bad in [
+            "",
+            "not-a-session",
+            "c247fe2e-aaa2-4084-98b1-ddc4acc461e0-extra",
+            "c247fe2e-aaa2-4084-98b1-ddc4acc461e", // group too short
+            "c247fe2eXaaa2X4084X98b1Xddc4acc461e0", // wrong separators
+            "g247fe2e-aaa2-4084-98b1-ddc4acc461e0", // 'g' is not hex
+            "../../etc/passwd",
+            "x&open -a Calculator",
+        ] {
+            assert!(!is_session_id(bad), "should reject {bad:?}");
+        }
+    }
 }
