@@ -46,7 +46,7 @@ fn set_hit_region(state: tauri::State<'_, HitRegion>, x: f64, y: f64, w: f64, h:
 }
 
 /// An always-on-top window swallows clicks across its whole rectangle, and this
-/// one is 180x255 of almost entirely transparent space. Follow the cursor and
+/// one is 220x270 of almost entirely transparent space. Follow the cursor and
 /// let clicks through everywhere except over the pet and its message panel.
 fn run_cursor_watcher(app: AppHandle) {
     let mut ignoring: Option<bool> = None;
@@ -216,8 +216,8 @@ fn main() {
                     let origin = monitor.position();
                     // Fallback matches the window size in tauri.conf.json.
                     let size = window.outer_size().unwrap_or(tauri::PhysicalSize {
-                        width: 180,
-                        height: 255,
+                        width: 220,
+                        height: 270,
                     });
                     let x = origin.x + screen.width.saturating_sub(size.width + 40) as i32;
                     let y = origin.y + screen.height.saturating_sub(size.height + 80) as i32;

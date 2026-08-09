@@ -83,10 +83,25 @@ from the tray icon.
 
 ## Roadmap
 
+**Getting updates.** Today the only way to update is `git pull` and
+rebuild, which needs a Rust toolchain just to pick up a bugfix. In order:
+
+- Publish releases, so people download a build instead of installing
+  Rust. Tagging `v*` builds macOS, Windows, and Linux and attaches them
+  to a GitHub release — see [.github/workflows/release.yml](.github/workflows/release.yml).
+- In-app updates via `tauri-plugin-updater`: check a signed manifest,
+  install on restart. Needs a signing keypair before it can ship.
+- Adapter version checks. Adapters are *copied* into place, so
+  `git pull` updates the repo but not the installed hook — someone can
+  run a months-old adapter against a current deskmate and never know.
+  Stamping a version into each event and bubbling a mismatch is enough.
+
+**Everything else.**
+
 - Transcript watcher: tail session logs (e.g. Claude Code JSONL) for
   tools with no hook system, zero per-tool setup
 - MCP server mode, so agents can talk to the pet as a tool
-- One pet / bubble lane per agent session
+- One pet per agent session, rather than one pet with per-session lanes
 - More creatures and community skins (the sprite registry makes this a
   one-file change)
 - A settings panel

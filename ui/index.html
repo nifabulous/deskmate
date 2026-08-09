@@ -38,7 +38,7 @@
     flex-direction: column;
     gap: 5px;
     align-self: stretch;
-    max-height: 140px;
+    max-height: 150px;
     overflow-y: auto;
     scrollbar-width: none;
   }
@@ -69,11 +69,35 @@
     background: var(--bubble-bg);
     color: var(--bubble-fg);
     border-radius: 10px;
-    padding: 6px 9px;
-    font-size: 9px;
+    padding: 7px 10px;
+    font-size: 12px;
     line-height: 1.35;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    /* The inset edge is the lane stripe: same colour as this message's dot, so
+       one session's messages read as a run down the side of the stack. Inset
+       rather than a border so it costs no layout. */
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35), inset 3px 0 0 var(--lane, transparent);
     animation: pop 160ms ease-out;
+  }
+  /* Which session/tab a message came from. Colour is derived from the session
+     id, so the same tab keeps the same colour for as long as it lives. */
+  .bubble .head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .bubble .lane {
+    flex: none;
+    font-size: 9px;
+    color: var(--bubble-dim);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .bubble .lane::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--lane, var(--bubble-dim));
   }
   /* Tail on the lowest bubble, pointing at the pet, so the text reads as the
      pet saying it rather than as a floating notification. */
@@ -87,7 +111,14 @@
     border-bottom: 0;
     border-top-color: var(--bubble-bg);
   }
-  .bubble .title { font-weight: 600; }
+  .bubble .title {
+    font-weight: 600;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .bubble .detail {
     color: var(--bubble-dim);
     display: -webkit-box;
@@ -414,8 +445,45 @@ function loadPanelOpen() {
   return true;
 }
 
-function showBubble({ title, detail, error }) {
-  messages.push({ title, detail, error: !!error, expiresAt: Date.now() + MESSAGE_TTL_MS });
+/* Two Claude Code tabs, or a Claude Code tab and an opencode run, both report
+   into the same pet. Every event carries a `session` (see docs/PROTOCOL.md), so
+   derive a stable colour and a short tag from it: one tab's messages then share
+   a dot and an edge stripe, and you can tell at a glance which one is talking.
+   The colour comes from the id itself rather than from arrival order, so it
+   survives messages expiring and the panel being closed. */
+const LANE_COLORS = [
+  "#5ac8fa", "#ffd60a", "#30d158", "#ff9f0a",
+  "#bf5af2", "#ff6482", "#64d2ff", "#a0e57c",
+];
+
+// Colours are handed out in first-seen order, not hashed from the id. Hashing
+// looks tidier but collides: with eight colours, three live sessions land on the
+// same one about a third of the time, and two tabs that look identical defeat
+// the point. Assigning in order keeps every session distinct until there are
+// more of them than colours.
+const laneColors = new Map();
+
+function laneOf(source, session) {
+  const id = session || source || "";
+  if (!id) return null;
+  if (!laneColors.has(id)) {
+    laneColors.set(id, LANE_COLORS[laneColors.size % LANE_COLORS.length]);
+  }
+  return {
+    color: laneColors.get(id),
+    // Short enough to sit next to the title without crowding it; the full
+    // source and id go in the tooltip.
+    tag: session ? session.slice(-4) : source,
+    title: [source, session].filter(Boolean).join(" · ") || "unknown source",
+  };
+}
+
+function showBubble({ title, detail, error, source, session }) {
+  messages.push({
+    title, detail, error: !!error,
+    lane: laneOf(source, session),
+    expiresAt: Date.now() + MESSAGE_TTL_MS,
+  });
   if (messages.length > MAX_MESSAGES) messages = messages.slice(-MAX_MESSAGES);
   render();
 }
@@ -448,12 +516,25 @@ function buildBubble(m) {
   const el = document.createElement("div");
   el.className = "bubble" + (m.error ? " error" : "");
   el.setAttribute("data-tauri-drag-region", "");
-  if (m.title) {
+  if (m.lane) el.style.setProperty("--lane", m.lane.color);
+  if (m.title || m.lane) {
+    const head = document.createElement("div");
+    head.className = "head";
+    head.setAttribute("data-tauri-drag-region", "");
     const t = document.createElement("div");
     t.className = "title";
-    t.textContent = m.title;
+    t.textContent = m.title || "";
     t.setAttribute("data-tauri-drag-region", "");
-    el.appendChild(t);
+    head.appendChild(t);
+    if (m.lane) {
+      const lane = document.createElement("div");
+      lane.className = "lane";
+      lane.textContent = m.lane.tag;
+      lane.title = m.lane.title;
+      lane.setAttribute("data-tauri-drag-region", "");
+      head.appendChild(lane);
+    }
+    el.appendChild(head);
   }
   if (m.detail) {
     const d = document.createElement("div");
@@ -501,37 +582,39 @@ function handleEvent(e) {
   const kind = e.kind || "status";
   const title = e.title || "";
   const detail = e.detail || "";
+  // Carried onto every bubble so each tab keeps its own colour and tag.
+  const from = { source: e.source || "", session: e.session || "" };
 
   switch (kind) {
     case "task_start":
       pet.mode = "working";
-      showBubble({ title: title || "Working…", detail });
+      showBubble({ title: title || "Working…", detail, ...from });
       break;
     case "tool_use":
       pet.mode = "working";
       // Tool events are frequent; only bubble when there is a title.
-      if (title) showBubble({ title, detail });
+      if (title) showBubble({ title, detail, ...from });
       break;
     case "task_done":
       pet.mode = "idle";
       pet.hopUntil = Date.now() + 700;
-      showBubble({ title: title || "Done", detail });
+      showBubble({ title: title || "Done", detail, ...from });
       break;
     case "error":
       pet.mode = "idle";
       pet.shakeUntil = Date.now() + 900;
-      showBubble({ title: title || "Something went wrong", detail, error: true });
+      showBubble({ title: title || "Something went wrong", detail, error: true, ...from });
       break;
     case "notify":
       pet.shakeUntil = Date.now() + 500;
-      showBubble({ title: title || "Notification", detail });
+      showBubble({ title: title || "Notification", detail, ...from });
       break;
     default:
-      if (title || detail) showBubble({ title, detail });
+      if (title || detail) showBubble({ title, detail, ...from });
   }
 }
 
-// The window is a 180x255 rectangle that is almost entirely transparent, and an
+// The window is a 220x270 rectangle that is almost entirely transparent, and an
 // always-on-top window swallows clicks across all of it — so without this the
 // pet blocks a big patch of whatever is underneath. Report where the pet
 // actually is; the Rust side watches the cursor and makes the rest of the
@@ -572,10 +655,13 @@ if (window.__TAURI__) {
 } else {
   // Opened in a plain browser (development): demo loop so the pet is alive.
   console.log("deskmate: no Tauri bridge, running demo mode");
+  // Two sessions on purpose, so the per-session colours and tags show up here
+  // the same way they do with real adapters attached.
   const demo = [
-    { kind: "task_start", title: "Review PR #104", detail: "Reading the diff and checking tests…" },
-    { kind: "tool_use", title: "Running tests", detail: "npm test" },
-    { kind: "task_done", title: "Review PR #104", detail: "Left 3 comments." },
+    { kind: "task_start", source: "claude-code", session: "demo-a1b2", title: "Review PR #104", detail: "Reading the diff and checking tests…" },
+    { kind: "tool_use", source: "opencode", session: "demo-c3d4", title: "Running tests", detail: "npm test" },
+    { kind: "tool_use", source: "claude-code", session: "demo-a1b2", title: "Editing files", detail: "src/handlers/auth.ts" },
+    { kind: "task_done", source: "claude-code", session: "demo-a1b2", title: "Review PR #104", detail: "Left 3 comments." },
   ];
   let i = 0;
   setInterval(() => handleEvent(demo[i++ % demo.length]), 4000);

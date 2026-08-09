@@ -1,0 +1,115 @@
+# Build deskmate for every desktop platform and attach the results to a
+# GitHub release, so people can download a build instead of installing a Rust
+# toolchain to get a bugfix.
+#
+# Cut a release by pushing a tag:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match the `version` in src-tauri/tauri.conf.json — the check
+# job fails the run if it doesn't, rather than shipping a build whose About
+# box disagrees with its filename.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:      # lets you rehearse the build without cutting a tag
+
+permissions:
+  contents: write         # needed to create the release and upload assets
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pet timer regression test
+        run: node test/pet-timers.test.js
+
+      - name: Tag matches the version in tauri.conf.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          conf="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "$tag" != "$conf" ]; then
+            echo "tag v$tag does not match tauri.conf.json version $conf" >&2
+            exit 1
+          fi
+          echo "version $conf"
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false     # one platform failing should not hide the others
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ""
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # webkit2gtk is the webview Tauri renders into on Linux; the rest are
+      # what its build script links against.
+      - name: Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Formatting and lints
+        working-directory: src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: deskmate ${{ github.ref_name }}
+          releaseBody: |
+            Download the build for your platform below.
+
+            macOS: unsigned, so the first launch needs right-click → Open,
+            or `xattr -cr deskmate.app`. Signing is not set up yet.
+
+            Then connect your agent — see the adapters in the README.
+          releaseDraft: true      # you review and publish, rather than the tag publishing for you
+          prerelease: false
+          projectPath: src-tauri
+          args: ${{ matrix.args }}
