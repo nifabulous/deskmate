@@ -63,14 +63,17 @@ Two steps: copy one hook script, merge one settings snippet.
 | Sleeping  | 5 minutes with no events       | Eyes closed, z z z   |
 
 Drag the pet anywhere on screen. It starts near the bottom-right corner.
+Right-click it to switch creatures — v0.1 ships an owl and a cat, and the
+choice is remembered.
 
 ## Roadmap
 
 - opencode adapter (plugin API)
 - Cursor adapter (agent hooks)
 - `deskmate notify` CLI for scripts, Makefiles, and CI
-- Multiple pets / one bubble lane per agent session
-- Alternative sprites and community skins
+- One pet / bubble lane per agent session
+- More creatures and community skins (the sprite registry makes this a
+  one-file change)
 - Click-through mode and a settings panel
 
 ## Contributing

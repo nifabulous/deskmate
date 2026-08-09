@@ -72,10 +72,12 @@
 "use strict";
 
 /* ---------------------------------------------------------------- sprites
-   Frames are plain string grids so anyone can redraw the pet in a text
-   editor. 16 columns per row. Palette keys below.                      */
+   deskmate ships multiple pets. Each pet is a palette plus five frames
+   (idle, blink, workA, workB, sleep) written as plain 16x16 string
+   grids, so adding a pet needs nothing but a text editor. Right-click
+   the pet to cycle through them.                                       */
 
-const PALETTE = {
+const OWL_PALETTE = {
   "O": "#e88e3c", // body
   "D": "#8a4b1d", // outline / dark feathers
   "W": "#f8f4ec", // eyes, belly
@@ -115,13 +117,89 @@ WINGS_OUT[9]  = "DODOOOOOOOOOODOD";
 WINGS_OUT[10] = "DODOWWWWWWWWODOD";
 WINGS_OUT[11] = ".DODOWWWWWWODOD.";
 
-const FRAMES = {
-  idle: EYES_OPEN,
-  blink: EYES_CLOSED,
-  workA: EYES_OPEN,
-  workB: WINGS_OUT,
-  sleep: EYES_CLOSED,
+const CAT_PALETTE = {
+  "G": "#8d8d96", // fur
+  "D": "#3c3c44", // outline
+  "W": "#f2eee6", // eyes, belly
+  "B": "#26262c", // pupils
+  "P": "#e08a94", // nose
+  ".": null,      // transparent
 };
+
+const CAT_OPEN = [
+  ".DD..........DD.",
+  ".DGD........DGD.",
+  ".DGGD......DGGD.",
+  ".DGGGDDDDDDGGGD.",
+  ".DGGGGGGGGGGGGD.",
+  ".DGWWGGGGGGWWGD.",
+  ".DGWBGGGGGGBWGD.",
+  ".DGGGGGPPGGGGGD.",
+  ".DGGGGDGGDGGGGD.",
+  ".DGGGGGGGGGGGGD.",
+  ".DGGWWWWWWWWGGD.",
+  ".DGGWWWWWWWWGGD.",
+  ".DGGWWWWWWWWGGD.",
+  "..DGGWWWWWWGGD..",
+  "...DGGGGGGGGD...",
+  "....DDDDDDDD....",
+];
+
+const CAT_CLOSED = CAT_OPEN.slice();
+CAT_CLOSED[5] = ".DGGGGGGGGGGGGD.";
+CAT_CLOSED[6] = ".DGDDGGGGGGDDGD.";
+
+// Ears twitch to the left while working.
+const CAT_TWITCH = CAT_OPEN.slice();
+CAT_TWITCH[0] = ".DD.........DD..";
+CAT_TWITCH[1] = ".DGD.......DGD..";
+CAT_TWITCH[2] = ".DGGD.....DGGD..";
+
+const PETS = {
+  owl: {
+    label: "Owl",
+    palette: OWL_PALETTE,
+    frames: {
+      idle: EYES_OPEN,
+      blink: EYES_CLOSED,
+      workA: EYES_OPEN,
+      workB: WINGS_OUT,
+      sleep: EYES_CLOSED,
+    },
+  },
+  cat: {
+    label: "Cat",
+    palette: CAT_PALETTE,
+    frames: {
+      idle: CAT_OPEN,
+      blink: CAT_CLOSED,
+      workA: CAT_OPEN,
+      workB: CAT_TWITCH,
+      sleep: CAT_CLOSED,
+    },
+  },
+};
+
+const PET_IDS = Object.keys(PETS);
+
+function loadPetId() {
+  try {
+    const saved = window.localStorage && localStorage.getItem("deskmate.pet");
+    if (saved && PETS[saved]) return saved;
+  } catch (_) { /* storage unavailable: fall through */ }
+  return PET_IDS[0];
+}
+
+let currentPetId = loadPetId();
+
+function cyclePet() {
+  const i = PET_IDS.indexOf(currentPetId);
+  currentPetId = PET_IDS[(i + 1) % PET_IDS.length];
+  try {
+    window.localStorage && localStorage.setItem("deskmate.pet", currentPetId);
+  } catch (_) { /* fine */ }
+  showBubble({ title: `Pet: ${PETS[currentPetId].label}`, detail: "Right-click to switch" });
+}
 
 /* ------------------------------------------------------------- rendering */
 
@@ -130,7 +208,7 @@ const ctx = canvas.getContext("2d");
 const SCALE = 9;          // 16px grid -> 144px sprite
 const GRID = 16;
 
-function drawFrame(frame, bobY) {
+function drawFrame(palette, frame, bobY) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const originX = Math.floor((canvas.width - GRID * SCALE) / 2);
   const originY = canvas.height - GRID * SCALE - 8 + bobY;
@@ -144,7 +222,7 @@ function drawFrame(frame, bobY) {
   for (let y = 0; y < frame.length; y++) {
     const row = frame[y];
     for (let x = 0; x < row.length; x++) {
-      const color = PALETTE[row[x]];
+      const color = palette[row[x]];
       if (!color) continue;
       ctx.fillStyle = color;
       ctx.fillRect(originX + x * SCALE, originY + y * SCALE, SCALE, SCALE);
@@ -175,7 +253,8 @@ const pet = {
 };
 
 function tick(now) {
-  let frame = FRAMES.idle;
+  const { palette, frames } = PETS[currentPetId];
+  let frame = frames.idle;
   let bob = Math.round(Math.sin(now / 900) * 2);
   let shakeX = 0;
 
@@ -184,17 +263,17 @@ function tick(now) {
   }
 
   if (pet.mode === "working") {
-    frame = Math.floor(now / 280) % 2 ? FRAMES.workB : FRAMES.workA;
+    frame = Math.floor(now / 280) % 2 ? frames.workB : frames.workA;
     bob = Math.round(Math.sin(now / 260) * 2);
   } else if (pet.mode === "sleeping") {
-    frame = FRAMES.sleep;
+    frame = frames.sleep;
     bob = Math.round(Math.sin(now / 1600) * 1);
   } else {
     if (now > pet.nextBlinkAt) {
       pet.blinkUntil = now + 140;
       pet.nextBlinkAt = now + 2200 + Math.random() * 3800;
     }
-    if (now < pet.blinkUntil) frame = FRAMES.blink;
+    if (now < pet.blinkUntil) frame = frames.blink;
   }
 
   if (now < pet.hopUntil) {
@@ -206,13 +285,19 @@ function tick(now) {
 
   ctx.save();
   ctx.translate(shakeX, 0);
-  drawFrame(frame, bob);
+  drawFrame(palette, frame, bob);
   if (pet.mode === "sleeping") drawZzz(now);
   ctx.restore();
 
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
+
+// Right-click the pet to switch creatures.
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  cyclePet();
+});
 
 /* ---------------------------------------------------------------- bubbles */
 

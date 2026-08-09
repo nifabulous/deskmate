@@ -14,8 +14,11 @@ with its own README covering installation.
 
 ## 2. The pet
 
-Sprites live in `ui/index.html` as plain string grids with a small
-palette, and the animation logic is a couple hundred lines of vanilla JS.
+Pets live in `ui/index.html` in the `PETS` registry: each one is a
+palette plus five 16x16 string-grid frames (idle, blink, workA, workB,
+sleep). Adding a creature means drawing five text grids and adding one
+registry entry. The animation logic is a couple hundred lines of vanilla
+JS.
 Open `ui/index.html` in a browser and it runs a demo event loop, so you
 can iterate without building the Rust app. Keep the UI dependency-free.
 
