@@ -122,6 +122,14 @@
   /* Clickable when we know how to get back to the session it came from. */
   .bubble .title.linked { cursor: pointer; }
   .bubble .title.linked:hover { text-decoration: underline; }
+  /* Without this a keyboard user can reach the title and have no idea where
+     they are — there is no default focus ring to fall back on once the window
+     is this dark. */
+  .bubble .title.linked:focus-visible {
+    outline: 2px solid var(--bubble-fg);
+    outline-offset: 1px;
+    border-radius: 3px;
+  }
   .bubble .detail {
     color: var(--bubble-dim);
     display: -webkit-box;
@@ -548,9 +556,20 @@ function buildBubble(m) {
       // start of a window drag.
       t.classList.add("linked");
       t.title = "Open this session in Claude";
-      t.addEventListener("click", (e) => {
+      // A div with a click handler is a button only to people using a mouse.
+      // Say what it is, and let the keyboard work it.
+      t.setAttribute("role", "button");
+      t.tabIndex = 0;
+      const open = (e) => {
         e.stopPropagation();
         focusSession(m.session);
+      };
+      t.addEventListener("click", open);
+      t.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open(e);
+        }
       });
     } else {
       t.setAttribute("data-tauri-drag-region", "");

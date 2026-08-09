@@ -22,15 +22,20 @@ const invokes = [];
 function makeNode() {
   const node = {
     className: "", textContent: "", title: "", children: [], style: { setProperty() {} },
-    _attrs: new Set(), _handlers: {},
+    _attrs: new Map(), _handlers: {},
     classList: {
       add(c) { node.className += (node.className ? " " : "") + c; },
       contains(c) { return node.className.split(" ").includes(c); },
     },
-    setAttribute(k) { node._attrs.add(k); },
+    setAttribute(k, v) { node._attrs.set(k, v); },
+    getAttribute(k) { return node._attrs.has(k) ? node._attrs.get(k) : null; },
     hasAttribute(k) { return node._attrs.has(k); },
     addEventListener(ev, fn) { (node._handlers[ev] ||= []).push(fn); },
     click() { (node._handlers.click || []).forEach((fn) => fn({ stopPropagation() {} })); },
+    press(key) {
+      (node._handlers.keydown || []).forEach((fn) =>
+        fn({ key, preventDefault() {}, stopPropagation() {} }));
+    },
     appendChild(c) { node.children.push(c); c.parentNode = node; },
     prepend(c) { node.children.unshift(c); c.parentNode = node; },
     removeChild(c) { node.children = node.children.filter((x) => x !== c); },
@@ -108,6 +113,23 @@ check("and passes the session id through unchanged", call && call.args.session, 
 invokes.length = 0;
 opencodeTitle.click();
 check("clicking a non-clickable title does nothing", invokes.length, 0);
+
+// The title is a div, so without these it is a button only to a mouse user:
+// nothing announces it, and Tab cannot reach it.
+check("clickable title announces itself as a button", claudeTitle.getAttribute("role"), "button");
+check("clickable title is reachable by Tab", claudeTitle.tabIndex, 0);
+check("non-clickable title is not in the tab order", opencodeTitle.tabIndex, undefined);
+
+for (const key of ["Enter", " "]) {
+  invokes.length = 0;
+  claudeTitle.press(key);
+  check(`pressing ${key === " " ? "Space" : key} opens the session`,
+    invokes.some((c) => c.name === "focus_session"), true);
+}
+
+invokes.length = 0;
+claudeTitle.press("a");
+check("other keys do nothing", invokes.length, 0);
 
 console.log(failures.length ? `\n${failures.length} failing` : "\nall passing");
 process.exit(failures.length ? 1 : 0);
