@@ -149,9 +149,13 @@
 <!-- No drag region on <body>: Tauri walks up from the event target, so a drag
      region here would swallow the click on the pet before it is seen. --><body>
   <div id="app">
-    <div id="log" data-tauri-drag-region hidden></div>
-    <div id="petwrap">
-      <canvas id="pet" width="84" height="90"></canvas>
+    <!-- Messages arrive and expire on their own, so announce them: without a
+         live region a screen reader user is told nothing when a build fails. -->
+    <div id="log" data-tauri-drag-region hidden
+         role="log" aria-live="polite" aria-label="Recent agent messages"></div>
+    <div id="petwrap" role="button" tabindex="0"
+         aria-label="deskmate — show or hide messages">
+      <canvas id="pet" width="84" height="90" role="img" aria-label="deskmate pet"></canvas>
       <div id="badge" hidden></div>
     </div>
   </div>
@@ -420,6 +424,16 @@ window.addEventListener("mousemove", (e) => {
     try {
       window.__TAURI__.window.getCurrentWindow().startDragging();
     } catch (_) { /* dragging unavailable: the press just does nothing */ }
+  }
+});
+
+// Opening the panel was a mouse-only gesture, which leaves the messages
+// unreachable without one. Dragging the window stays mouse-only: there is no
+// sensible keyboard equivalent of "put the pet over there".
+petWrap.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    togglePanel();
   }
 });
 
