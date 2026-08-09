@@ -18,6 +18,7 @@ const UI = path.join(__dirname, "..", "ui", "index.html");
 
 const created = [];
 const invokes = [];
+const byId = {};
 
 function makeNode() {
   const node = {
@@ -26,6 +27,11 @@ function makeNode() {
     classList: {
       add(c) { node.className += (node.className ? " " : "") + c; },
       contains(c) { return node.className.split(" ").includes(c); },
+      toggle(c, on) {
+        if (on) { if (!node.classList.contains(c)) node.classList.add(c); }
+        else node.className = node.className.split(" ").filter((x) => x !== c).join(" ");
+        return !!on;
+      },
     },
     setAttribute(k, v) { node._attrs.set(k, v); },
     getAttribute(k) { return node._attrs.has(k) ? node._attrs.get(k) : null; },
@@ -63,7 +69,9 @@ const sandbox = {
   requestAnimationFrame: () => 0,
   addEventListener: () => {},
   localStorage: { getItem: () => null, setItem() {} },
-  document: { getElementById: makeNode, createElement: makeNode, body: makeNode() },
+  // Cache by id: the UI holds on to the node it looked up, so a fresh one per
+  // call would leave the test poking at an element nothing renders into.
+  document: { getElementById: (id) => (byId[id] ||= makeNode()), createElement: makeNode, body: makeNode() },
   __TAURI__: {
     core: {
       invoke(name, args) {
@@ -130,6 +138,19 @@ for (const key of ["Enter", " "]) {
 invokes.length = 0;
 claudeTitle.press("a");
 check("other keys do nothing", invokes.length, 0);
+
+// Both scrollbars are hidden, so the top fade is the only sign that older
+// messages are still above the fold — and it must not dim the top message
+// when nothing is actually hidden.
+const logEl = byId.log;
+logEl.scrollHeight = 411;
+logEl.clientHeight = 150;
+sandbox.handleEvent({ kind: "tool_use", source: "claude-code", title: "Overflowing", detail: "x" });
+check("fades the top edge when messages are hidden above", logEl.classList.contains("clipped"), true);
+
+logEl.scrollHeight = 90;
+sandbox.handleEvent({ kind: "tool_use", source: "claude-code", title: "Fits", detail: "x" });
+check("no fade when everything fits", logEl.classList.contains("clipped"), false);
 
 console.log(failures.length ? `\n${failures.length} failing` : "\nall passing");
 process.exit(failures.length ? 1 : 0);

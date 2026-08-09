@@ -33,7 +33,7 @@ function load(htmlPath, clock, { reduceMotion = false } = {}) {
     { get: (t, k) => (k in t ? t[k] : () => {}), set: () => true }
   );
   const node = () => ({
-    className: "", children: [], style: {}, classList: { add() {} },
+    className: "", children: [], style: {}, classList: { add() {}, toggle() {} },
     appendChild() {}, prepend() {}, removeChild() {}, remove() {},
     setAttribute() {}, addEventListener() {},
     getContext: () => ctx, width: 160, height: 176,

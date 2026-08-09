@@ -43,6 +43,10 @@
     scrollbar-width: none;
   }
   #log::-webkit-scrollbar { display: none; }
+  #log.clipped {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+  }
   #petwrap {
     position: relative;
     cursor: pointer;
@@ -640,6 +644,11 @@ function render() {
       if (m.el.parentNode !== logEl) logEl.appendChild(m.el);
     }
     logEl.scrollTop = logEl.scrollHeight;   // keep the newest in view
+    // Both scrollbars are hidden to keep the window clean, which also removed
+    // the only sign that older messages are still up there. Fade the top edge
+    // when there are, so a clipped message reads as "more above" rather than a
+    // hard cut — and leave it alone when nothing is hidden.
+    logEl.classList.toggle("clipped", logEl.scrollHeight > logEl.clientHeight);
   } else {
     messages.forEach((m) => { if (m.el) m.el.remove(); });
   }
