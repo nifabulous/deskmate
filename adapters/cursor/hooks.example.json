@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      { "command": "~/.deskmate/cursor-hook.sh beforeSubmitPrompt" }
+    ],
+    "beforeShellExecution": [
+      { "command": "~/.deskmate/cursor-hook.sh beforeShellExecution" }
+    ],
+    "afterFileEdit": [
+      { "command": "~/.deskmate/cursor-hook.sh afterFileEdit" }
+    ],
+    "stop": [
+      { "command": "~/.deskmate/cursor-hook.sh stop" }
+    ]
+  }
+}
