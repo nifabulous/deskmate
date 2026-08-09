@@ -20,7 +20,7 @@ const vm = require("vm");
 
 const UI = path.join(__dirname, "..", "ui", "index.html");
 
-function load(htmlPath, clock) {
+function load(htmlPath, clock, { reduceMotion = false } = {}) {
   const html = fs.readFileSync(htmlPath, "utf8");
   let code = html.slice(html.indexOf("<script>") + 8, html.lastIndexOf("</script>"));
   code = code.replace(/requestAnimationFrame\(tick\);/g, "");
@@ -47,6 +47,7 @@ function load(htmlPath, clock) {
     Date: class extends Date { static now() { return clock.now; } },
     requestAnimationFrame: () => 0,
     addEventListener: () => {},
+    matchMedia: (q) => ({ matches: reduceMotion && q.includes("reduced-motion") }),
     document: { getElementById: node, createElement: node, body: node() },
   };
   sandbox.window = sandbox;
@@ -98,6 +99,28 @@ check("task_done returns it to idle", pet.mode, "idle");
 let blinked = false;
 for (let i = 0; i < 60; i++) { step(500); if (clock.now < pet.blinkUntil) blinked = true; }
 check("blinks while idle", blinked, true);
+
+// The pet is always on top and cannot be scrolled away from, so a system
+// request for less motion has to actually stop the movement — while the state
+// itself (working, sleeping) still comes through in the sprite.
+{
+  const rmClock = { now: 1_700_000_000_000 };
+  const rm = load(UI, rmClock, { reduceMotion: true });
+  let rmRaf = 0;
+  const rmStep = (ms) => { rmClock.now += ms; rmRaf += ms; rm.tick(rmRaf); };
+
+  rm.sandbox.handleEvent({ kind: "error", title: "Boom" });
+  rm.shakeX.length = 0;
+  for (let i = 0; i < 8; i++) rmStep(100);        // inside the shake window
+  check("reduced motion: does not shake on error", rm.shakeX.some((x) => x !== 0), false);
+
+  rm.sandbox.handleEvent({ kind: "task_start", title: "Go" });
+  rmStep(0);
+  check("reduced motion: still reports working", rm.pet.mode, "working");
+
+  rmStep(6 * 60 * 1000);
+  check("reduced motion: still falls asleep", rm.pet.mode, "sleeping");
+}
 
 console.log(failures.length ? `\n${failures.length} failing` : "\nall passing");
 process.exit(failures.length ? 1 : 0);

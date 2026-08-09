@@ -139,6 +139,10 @@
   }
   .bubble.error .title { color: var(--bubble-err); }
   .bubble.fading { opacity: 0; transition: opacity 600ms ease; }
+  @media (prefers-reduced-motion: reduce) {
+    .bubble { animation: none; }
+    .bubble.fading { transition: none; }
+  }
   @keyframes pop {
     from { transform: translateY(6px) scale(0.96); opacity: 0; }
     to   { transform: none; opacity: 1; }
@@ -352,6 +356,12 @@ const pet = {
   hopUntil: 0,
 };
 
+// Read live rather than once, so turning the system setting on takes effect
+// without restarting the pet. Absent in the test harness, where it is false.
+const reduceMotion = window.matchMedia
+  ? window.matchMedia("(prefers-reduced-motion: reduce)")
+  : { matches: false };
+
 function tick() {
   // Every timer on `pet` is stamped with Date.now(), so compare against the
   // same clock. requestAnimationFrame passes its own timestamp, but that one
@@ -387,10 +397,19 @@ function tick() {
     shakeX = Math.round(Math.sin(now / 40) * 2);
   }
 
+  // A desk pet sits on top of everything all day and cannot be scrolled away
+  // from, so when the system asks for less motion, stop moving. The sprite
+  // still changes for working, sleeping, and blinking — that carries the state
+  // without anything bobbing, hopping, or shaking.
+  if (reduceMotion.matches) {
+    bob = 0;
+    shakeX = 0;
+  }
+
   ctx.save();
   ctx.translate(shakeX, 0);
   drawFrame(palette, frame, bob);
-  if (pet.mode === "sleeping") drawZzz(now);
+  if (pet.mode === "sleeping") drawZzz(reduceMotion.matches ? 0 : now);
   ctx.restore();
 
   requestAnimationFrame(tick);
