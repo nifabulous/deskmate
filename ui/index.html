@@ -20,24 +20,72 @@
     -webkit-user-select: none;
     cursor: default;
   }
-  #bubbles {
+  /* Bubbles sit directly on top of the pet and the whole stack is anchored to
+     the bottom, so the pet keeps its place on screen while the bubbles grow
+     upward. Anchoring them to opposite edges instead leaves a dead gap that
+     grows with the window. */
+  #app {
     position: absolute;
-    top: 8px; left: 8px; right: 8px;
+    left: 6px; right: 6px; bottom: 5px;
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: 6px;
-    align-items: stretch;
   }
-  .bubble {
+  [hidden] { display: none !important; }
+  #log {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    align-self: stretch;
+    max-height: 140px;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  #log::-webkit-scrollbar { display: none; }
+  #petwrap {
+    position: relative;
+    cursor: pointer;
+    line-height: 0;
+  }
+  /* How many messages are waiting while the panel is shut. */
+  #badge {
+    position: absolute;
+    top: 3px; right: 0;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 4px;
+    border-radius: 7px;
     background: var(--bubble-bg);
     color: var(--bubble-fg);
-    border-radius: 14px;
-    padding: 8px 12px;
-    font-size: 12px;
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 14px;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  .bubble {
+    position: relative;
+    background: var(--bubble-bg);
+    color: var(--bubble-fg);
+    border-radius: 10px;
+    padding: 6px 9px;
+    font-size: 9px;
     line-height: 1.35;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
     animation: pop 160ms ease-out;
-    overflow: hidden;
+  }
+  /* Tail on the lowest bubble, pointing at the pet, so the text reads as the
+     pet saying it rather than as a floating notification. */
+  .bubble:last-child::after {
+    content: "";
+    position: absolute;
+    bottom: -5px;
+    left: 50%;
+    margin-left: -5px;
+    border: 5px solid transparent;
+    border-bottom: 0;
+    border-top-color: var(--bubble-bg);
   }
   .bubble .title { font-weight: 600; }
   .bubble .detail {
@@ -53,19 +101,17 @@
     from { transform: translateY(6px) scale(0.96); opacity: 0; }
     to   { transform: none; opacity: 1; }
   }
-  #stage {
-    position: absolute;
-    left: 0; right: 0; bottom: 6px;
-    display: flex;
-    justify-content: center;
-  }
   #pet { image-rendering: pixelated; }
 </style>
 </head>
-<body data-tauri-drag-region>
-  <div id="bubbles" data-tauri-drag-region></div>
-  <div id="stage" data-tauri-drag-region>
-    <canvas id="pet" width="160" height="176" data-tauri-drag-region></canvas>
+<!-- No drag region on <body>: Tauri walks up from the event target, so a drag
+     region here would swallow the click on the pet before it is seen. --><body>
+  <div id="app">
+    <div id="log" data-tauri-drag-region hidden></div>
+    <div id="petwrap">
+      <canvas id="pet" width="84" height="90"></canvas>
+      <div id="badge" hidden></div>
+    </div>
   </div>
 
 <script>
@@ -205,37 +251,45 @@ function cyclePet() {
 
 const canvas = document.getElementById("pet");
 const ctx = canvas.getContext("2d");
-const SCALE = 9;          // 16px grid -> 144px sprite
+const SCALE = 4.5;        // 16px grid -> 72px sprite
 const GRID = 16;
 
 function drawFrame(palette, frame, bobY) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const originX = Math.floor((canvas.width - GRID * SCALE) / 2);
-  const originY = canvas.height - GRID * SCALE - 8 + bobY;
+  const originY = canvas.height - GRID * SCALE - 6 + bobY;
 
-  // soft ground shadow
+  // soft ground shadow, a little narrower than the sprite
   ctx.fillStyle = "rgba(0,0,0,0.28)";
   ctx.beginPath();
-  ctx.ellipse(canvas.width / 2, canvas.height - 8, 52, 8, 0, 0, Math.PI * 2);
+  ctx.ellipse(canvas.width / 2, canvas.height - 6, GRID * SCALE * 0.36, 5, 0, 0, Math.PI * 2);
   ctx.fill();
 
+  // SCALE need not be a whole number, so snap every cell to integer edges and
+  // take the width from the gap between them. Cells end up 4 or 5 pixels wide
+  // and stay hard-edged; drawing at fractional coordinates would anti-alias the
+  // sprite into a blur.
   for (let y = 0; y < frame.length; y++) {
     const row = frame[y];
+    const y0 = Math.round(originY + y * SCALE);
+    const y1 = Math.round(originY + (y + 1) * SCALE);
     for (let x = 0; x < row.length; x++) {
       const color = palette[row[x]];
       if (!color) continue;
+      const x0 = Math.round(originX + x * SCALE);
+      const x1 = Math.round(originX + (x + 1) * SCALE);
       ctx.fillStyle = color;
-      ctx.fillRect(originX + x * SCALE, originY + y * SCALE, SCALE, SCALE);
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
     }
   }
 }
 
 function drawZzz(t) {
   ctx.fillStyle = "rgba(240,240,245,0.85)";
-  ctx.font = "600 14px monospace";
+  ctx.font = "600 9px monospace";
   const phase = Math.floor(t / 700) % 3;
   for (let i = 0; i <= phase; i++) {
-    ctx.fillText("z", canvas.width / 2 + 44 + i * 10, 46 - i * 12);
+    ctx.fillText("z", canvas.width / 2 + 22 + i * 6, 26 - i * 8);
   }
 }
 
@@ -244,7 +298,7 @@ function drawZzz(t) {
 const SLEEP_AFTER_MS = 5 * 60 * 1000;
 
 const pet = {
-  mode: "idle",            // idle | working | attention | sleeping
+  mode: "idle",            // idle | working | sleeping
   lastEventAt: Date.now(),
   blinkUntil: 0,
   nextBlinkAt: Date.now() + 2500,
@@ -252,7 +306,11 @@ const pet = {
   hopUntil: 0,
 };
 
-function tick(now) {
+function tick() {
+  // Every timer on `pet` is stamped with Date.now(), so compare against the
+  // same clock. requestAnimationFrame passes its own timestamp, but that one
+  // counts from page load and would never line up with a wall-clock stamp.
+  const now = Date.now();
   const { palette, frames } = PETS[currentPetId];
   let frame = frames.idle;
   let bob = Math.round(Math.sin(now / 900) * 2);
@@ -277,10 +335,10 @@ function tick(now) {
   }
 
   if (now < pet.hopUntil) {
-    bob -= Math.abs(Math.round(Math.sin(now / 90) * 8));
+    bob -= Math.abs(Math.round(Math.sin(now / 90) * 4));
   }
   if (now < pet.shakeUntil) {
-    shakeX = Math.round(Math.sin(now / 40) * 3);
+    shakeX = Math.round(Math.sin(now / 40) * 2);
   }
 
   ctx.save();
@@ -293,44 +351,140 @@ function tick(now) {
 }
 requestAnimationFrame(tick);
 
+/* ---------------------------------------------------------------- pointer
+   The pet is both a drag handle and a button, so data-tauri-drag-region is off
+   it: that attribute starts a window drag on mousedown, which would eat every
+   click. Instead, drag once the pointer has actually travelled, and treat a
+   press that never travelled as a click. */
+
+const petWrap = document.getElementById("petwrap");
+const DRAG_THRESHOLD_PX = 4;
+let pressOrigin = null;
+let dragging = false;
+
+petWrap.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  pressOrigin = { x: e.screenX, y: e.screenY };
+  dragging = false;
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!pressOrigin || dragging) return;
+  if (Math.abs(e.screenX - pressOrigin.x) < DRAG_THRESHOLD_PX &&
+      Math.abs(e.screenY - pressOrigin.y) < DRAG_THRESHOLD_PX) return;
+  dragging = true;
+  // The OS takes the pointer from here, so mouseup may never arrive.
+  if (window.__TAURI__) {
+    try {
+      window.__TAURI__.window.getCurrentWindow().startDragging();
+    } catch (_) { /* dragging unavailable: the press just does nothing */ }
+  }
+});
+
+window.addEventListener("mouseup", () => {
+  if (pressOrigin && !dragging) togglePanel();
+  pressOrigin = null;
+  dragging = false;
+});
+
 // Right-click the pet to switch creatures.
-canvas.addEventListener("contextmenu", (e) => {
+petWrap.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   cyclePet();
 });
 
-/* ---------------------------------------------------------------- bubbles */
+/* --------------------------------------------------------------- messages
+   Messages live in a list, not loose in the DOM, so the panel can be closed
+   without losing what arrived while it was shut. Click the pet to open or
+   close it; the newest message sits closest to the pet and wears the tail. */
 
-const bubblesEl = document.getElementById("bubbles");
-const MAX_BUBBLES = 3;
-const BUBBLE_TTL_MS = 45 * 1000;
+const logEl = document.getElementById("log");
+const badgeEl = document.getElementById("badge");
+const MAX_MESSAGES = 8;
+const MESSAGE_TTL_MS = 45 * 1000;
+
+let messages = [];
+let panelOpen = loadPanelOpen();
+
+function loadPanelOpen() {
+  try {
+    const saved = window.localStorage && localStorage.getItem("deskmate.panel");
+    if (saved !== null && saved !== undefined) return saved === "open";
+  } catch (_) { /* storage unavailable: fall through */ }
+  return true;
+}
 
 function showBubble({ title, detail, error }) {
+  messages.push({ title, detail, error: !!error, expiresAt: Date.now() + MESSAGE_TTL_MS });
+  if (messages.length > MAX_MESSAGES) messages = messages.slice(-MAX_MESSAGES);
+  render();
+}
+
+function togglePanel() {
+  panelOpen = !panelOpen;
+  try {
+    window.localStorage && localStorage.setItem("deskmate.panel", panelOpen ? "open" : "closed");
+  } catch (_) { /* fine */ }
+  // Opening restarts the clock, so a pile-up gets a full read before it goes.
+  if (panelOpen) {
+    const until = Date.now() + MESSAGE_TTL_MS;
+    messages.forEach((m) => { m.expiresAt = until; });
+  }
+  render();
+}
+
+// Only expire while the panel is open — a message nobody could see should not
+// count as one that has been read.
+setInterval(() => {
+  if (!panelOpen) return;
+  const live = messages.filter((m) => m.expiresAt > Date.now());
+  if (live.length !== messages.length) {
+    messages = live;
+    render();
+  }
+}, 1000);
+
+function buildBubble(m) {
   const el = document.createElement("div");
-  el.className = "bubble" + (error ? " error" : "");
+  el.className = "bubble" + (m.error ? " error" : "");
   el.setAttribute("data-tauri-drag-region", "");
-  if (title) {
+  if (m.title) {
     const t = document.createElement("div");
     t.className = "title";
-    t.textContent = title;
+    t.textContent = m.title;
     t.setAttribute("data-tauri-drag-region", "");
     el.appendChild(t);
   }
-  if (detail) {
+  if (m.detail) {
     const d = document.createElement("div");
     d.className = "detail";
-    d.textContent = detail;
+    d.textContent = m.detail;
     d.setAttribute("data-tauri-drag-region", "");
     el.appendChild(d);
   }
-  bubblesEl.prepend(el);
-  while (bubblesEl.children.length > MAX_BUBBLES) {
-    bubblesEl.removeChild(bubblesEl.lastChild);
+  return el;
+}
+
+function render() {
+  // Reuse each message's element so an arrival does not re-animate the rest.
+  Array.from(logEl.children).forEach((el) => {
+    if (!messages.some((m) => m.el === el)) el.remove();
+  });
+
+  if (panelOpen) {
+    for (const m of messages) {
+      if (!m.el) m.el = buildBubble(m);
+      if (m.el.parentNode !== logEl) logEl.appendChild(m.el);
+    }
+    logEl.scrollTop = logEl.scrollHeight;   // keep the newest in view
+  } else {
+    messages.forEach((m) => { if (m.el) m.el.remove(); });
   }
-  setTimeout(() => {
-    el.classList.add("fading");
-    setTimeout(() => el.remove(), 700);
-  }, BUBBLE_TTL_MS);
+
+  logEl.hidden = !panelOpen || messages.length === 0;
+  badgeEl.hidden = panelOpen || messages.length === 0;
+  badgeEl.textContent = String(messages.length);
+  if (window.__TAURI__) publishHitRegion();
 }
 
 /* ------------------------------------------------------------ event intake
@@ -377,10 +531,44 @@ function handleEvent(e) {
   }
 }
 
+// The window is a 180x255 rectangle that is almost entirely transparent, and an
+// always-on-top window swallows clicks across all of it — so without this the
+// pet blocks a big patch of whatever is underneath. Report where the pet
+// actually is; the Rust side watches the cursor and makes the rest of the
+// window click-through.
+function publishHitRegion() {
+  // #app is exactly the visible content: the pet alone when the panel is shut,
+  // pet plus panel when it is open. Everything outside stays click-through.
+  const r = document.getElementById("app").getBoundingClientRect();
+  window.__TAURI__.core
+    .invoke("set_hit_region", { x: r.left, y: r.top, w: r.width, h: r.height })
+    .catch(() => { /* older build without the command: window stays solid */ });
+}
+
+// If the event server could not bind its port, nothing will ever reach the pet.
+// Say so in a bubble — the Rust side can only print to stderr, which nobody
+// sees when the app is launched from an icon. The server binds in a background
+// thread, so retry a few times in case the webview won the race.
+function reportStartupError(attempt) {
+  window.__TAURI__.core
+    .invoke("startup_error")
+    .then((message) => {
+      if (message) {
+        showBubble({ title: "deskmate is not listening", detail: message, error: true });
+      } else if (attempt < 3) {
+        setTimeout(() => reportStartupError(attempt + 1), 700);
+      }
+    })
+    .catch(() => { /* older build without the command: nothing to report */ });
+}
+
 if (window.__TAURI__) {
   window.__TAURI__.event.listen("deskmate:event", (msg) => {
     try { handleEvent(msg.payload || {}); } catch (err) { console.error(err); }
   });
+  reportStartupError(0);
+  publishHitRegion();
+  window.addEventListener("resize", publishHitRegion);
 } else {
   // Opened in a plain browser (development): demo loop so the pet is alive.
   console.log("deskmate: no Tauri bridge, running demo mode");

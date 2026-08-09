@@ -22,6 +22,17 @@ JS.
 Open `ui/index.html` in a browser and it runs a demo event loop, so you
 can iterate without building the Rust app. Keep the UI dependency-free.
 
+The pet's timers have a regression test that drives the real `tick()`
+against a controlled clock, with no browser and no dependencies:
+
+```sh
+node test/pet-timers.test.js
+```
+
+Run it after touching the animation loop. Timing bugs there are invisible
+by eye — a wrong clock source once left the pet unable to blink or sleep
+while everything still looked fine on screen.
+
 ## 3. The app shell
 
 The Rust side (`src-tauri/`) is intentionally thin: one window, one HTTP
@@ -42,3 +53,14 @@ need a strong reason.
 
 Maintainers cut releases with `cargo tauri build` per platform. Version
 lives in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`.
+
+The platform icon set is generated, not hand-drawn. `src-tauri/icons/`
+holds the 1024x1024 source, itself rendered from the owl sprite so the two
+cannot drift apart:
+
+```sh
+python3 tools/make-icon.py            # sprite -> icons/icon-source.png
+cargo tauri icon src-tauri/icons/icon-source.png
+```
+
+Redraw the owl and you regenerate the icon with the same two commands.

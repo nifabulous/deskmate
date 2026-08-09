@@ -16,6 +16,11 @@ environment variable (set it for both deskmate and your adapter).
 `GET /health` returns `{"ok":true,"app":"deskmate"}` and is the cheap way
 for an adapter to check whether deskmate is running.
 
+Requests carrying an `Origin` header are refused with `403`. Adapters are
+CLI tools and never send one; browsers always do, and a `text/plain` form
+post reaches a local server without any preflight to stop it. Without that
+rule, any page you happened to visit could write on your pet.
+
 ## Event shape
 
 ```json

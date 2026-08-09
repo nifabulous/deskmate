@@ -31,7 +31,7 @@ Prerequisites: [Rust](https://rustup.rs) and the
 
 ```sh
 cargo install tauri-cli --version "^2"
-git clone https://github.com/YOURNAME/deskmate
+git clone https://github.com/nifabulous/deskmate
 cd deskmate/src-tauri
 cargo tauri dev        # or: cargo tauri build
 ```
@@ -66,12 +66,20 @@ Tauri bridge it runs a demo loop so you can iterate on animations.
 | Idle      | Nothing happening              | Bobbing, blinking    |
 | Working   | `task_start` / `tool_use`      | Wing-flapping        |
 | Done      | `task_done`                    | Happy hop            |
-| Attention | `notify` / `error`             | Shake (+ red bubble) |
+| Attention | `notify` / `error`             | Shake; `error` bubbles red |
 | Sleeping  | 5 minutes with no events       | Eyes closed, z z z   |
 
-Drag the pet anywhere on screen. It starts near the bottom-right corner.
-Right-click it to switch creatures — v0.1 ships an owl and a cat, and the
-choice is remembered.
+Messages stack above the pet, newest nearest its head. **Click the pet** to
+close the panel and **click again** to reopen it — anything that arrives
+while it is shut waits there, and a small count sits on the pet's shoulder
+so you know how much. Opening gives everything a fresh 45 seconds before it
+fades, so a burst that landed while you were away is still readable.
+
+**Drag** the pet anywhere on screen; it starts near the bottom-right corner.
+**Right-click** to switch creatures — v0.1 ships an owl and a cat, and the
+choice is remembered. Clicks land on the pet and the open panel; the rest of
+the window is click-through, so it never blocks what is underneath. Quit
+from the tray icon.
 
 ## Roadmap
 
@@ -81,7 +89,7 @@ choice is remembered.
 - One pet / bubble lane per agent session
 - More creatures and community skins (the sprite registry makes this a
   one-file change)
-- Click-through mode and a settings panel
+- A settings panel
 
 ## Contributing
 
