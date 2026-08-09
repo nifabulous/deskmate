@@ -7,14 +7,14 @@ switching back to the terminal.
 
 deskmate is tool-agnostic. It speaks a simple local HTTP protocol
 ([docs/PROTOCOL.md](docs/PROTOCOL.md)), and adapters translate each
-tool's activity into deskmate events. Claude Code is supported today;
-opencode, Cursor, and a generic CLI are on the roadmap.
+tool's activity into deskmate events. Claude Code and opencode are
+supported today; Cursor and a generic CLI are on the roadmap.
 
 ## How it works
 
 ```
 Claude Code ──hooks──▶ deskmate-hook.sh ──HTTP──▶ deskmate (Tauri)
-opencode    ──plugin─▶ (planned)         127.0.0.1:8990    │
+opencode    ──plugin─▶ deskmate.js       127.0.0.1:8990    │
 anything    ──curl───▶ your script                    pixel owl 🦉
 ```
 
@@ -47,10 +47,12 @@ curl -X POST http://127.0.0.1:8990/event \
 You can also open `ui/index.html` directly in a browser; without the
 Tauri bridge it runs a demo loop so you can iterate on animations.
 
-## Connect Claude Code
+## Connect your agent
 
-See [adapters/claude-code/README.md](adapters/claude-code/README.md).
-Two steps: copy one hook script, merge one settings snippet.
+- **Claude Code**: [adapters/claude-code/README.md](adapters/claude-code/README.md)
+  — copy one hook script, merge one settings snippet.
+- **opencode**: [adapters/opencode/README.md](adapters/opencode/README.md)
+  — copy one plugin file into opencode's plugin folder.
 
 ## Pet states
 
@@ -68,7 +70,6 @@ choice is remembered.
 
 ## Roadmap
 
-- opencode adapter (plugin API)
 - Cursor adapter (agent hooks)
 - `deskmate notify` CLI for scripts, Makefiles, and CI
 - Transcript watcher: tail session logs (e.g. Claude Code JSONL) for
