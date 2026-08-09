@@ -140,6 +140,10 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    /* Details are mostly file paths and command lines, which have no spaces to
+       break at. In a 220px window one long path would otherwise run off the
+       side and be cut by the window's own overflow rather than clamped here. */
+    overflow-wrap: anywhere;
   }
   .bubble.error .title { color: var(--bubble-err); }
   .bubble.fading { opacity: 0; transition: opacity 600ms ease; }
