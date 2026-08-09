@@ -564,7 +564,15 @@ function togglePanel() {
   // Opening restarts the clock, so a pile-up gets a full read before it goes.
   if (panelOpen) {
     const until = Date.now() + MESSAGE_TTL_MS;
-    messages.forEach((m) => { m.expiresAt = until; });
+    messages.forEach((m) => {
+      m.expiresAt = until;
+      // A message part-way through fading out just got its full life back, so
+      // take the class off as well or it stays invisible for the whole of it.
+      if (m.fading) {
+        m.fading = false;
+        if (m.el) m.el.classList.remove("fading");
+      }
+    });
   }
   render();
 }
@@ -573,7 +581,17 @@ function togglePanel() {
 // count as one that has been read.
 setInterval(() => {
   if (!panelOpen) return;
-  const live = messages.filter((m) => m.expiresAt > Date.now());
+  const now = Date.now();
+  // Start the fade before the message goes, so it dissolves instead of
+  // blinking out. Lead by a whole sweep: a shorter lead than the interval
+  // could fall between two ticks and never be applied at all.
+  for (const m of messages) {
+    if (!m.fading && m.el && m.expiresAt - now <= 1000) {
+      m.fading = true;
+      m.el.classList.add("fading");
+    }
+  }
+  const live = messages.filter((m) => m.expiresAt > now);
   if (live.length !== messages.length) {
     messages = live;
     render();

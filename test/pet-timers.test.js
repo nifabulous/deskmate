@@ -25,25 +25,36 @@ function load(htmlPath, clock, { reduceMotion = false } = {}) {
   let code = html.slice(html.indexOf("<script>") + 8, html.lastIndexOf("</script>"));
   code = code.replace(/requestAnimationFrame\(tick\);/g, "");
   code = code.replace("setInterval(() => handleEvent(demo[i++ % demo.length]), 4000);", "void 0;");
-  code += "\nglobalThis.__tick = tick; globalThis.__pet = pet;";
+  code += "\nglobalThis.__tick = tick; globalThis.__pet = pet;" +
+    "\nglobalThis.__messages = () => messages; globalThis.__togglePanel = togglePanel;";
 
   const shakeX = [];
+  const intervals = [];
   const ctx = new Proxy(
     { translate: (x) => shakeX.push(x) },
     { get: (t, k) => (k in t ? t[k] : () => {}), set: () => true }
   );
-  const node = () => ({
-    className: "", children: [], style: {}, classList: { add() {}, toggle() {} },
-    appendChild() {}, prepend() {}, removeChild() {}, remove() {},
-    setAttribute() {}, addEventListener() {},
-    getContext: () => ctx, width: 160, height: 176,
-  });
+  const node = () => {
+    const classes = new Set();
+    return {
+      className: "", children: [], style: {},
+      classList: {
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+        contains: (c) => classes.has(c),
+        toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
+      },
+      appendChild() {}, prepend() {}, removeChild() {}, remove() {},
+      setAttribute() {}, addEventListener() {},
+      getContext: () => ctx, width: 160, height: 176,
+    };
+  };
 
   const sandbox = {
     console: { log() {}, error() {} },
     Math,
     setTimeout: () => 0,
-    setInterval: () => 0,
+    setInterval: (fn) => { intervals.push(fn); return 0; },
     Date: class extends Date { static now() { return clock.now; } },
     requestAnimationFrame: () => 0,
     addEventListener: () => {},
@@ -53,7 +64,7 @@ function load(htmlPath, clock, { reduceMotion = false } = {}) {
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
-  return { sandbox, pet: sandbox.__pet, tick: sandbox.__tick, shakeX };
+  return { sandbox, pet: sandbox.__pet, tick: sandbox.__tick, shakeX, intervals };
 }
 
 const failures = [];
@@ -120,6 +131,29 @@ check("blinks while idle", blinked, true);
 
   rmStep(6 * 60 * 1000);
   check("reduced motion: still falls asleep", rm.pet.mode, "sleeping");
+}
+
+// Messages fade out on their way to expiring. Reopening the panel hands every
+// message its full life back, so a bubble caught mid-fade has to lose the class
+// too — otherwise it sits there for the next 45 seconds, fully transparent.
+{
+  const fClock = { now: 1_700_000_000_000 };
+  const f = load(UI, fClock);
+  const sweep = () => f.intervals.forEach((fn) => fn());
+  const bubbleFor = (m) => m.el && m.el.classList.contains("fading");
+
+  f.sandbox.handleEvent({ kind: "tool_use", title: "Fades", detail: "x" });
+  const msg = () => f.sandbox.__messages()[0];
+  check("message starts un-faded", bubbleFor(msg()), false);
+
+  fClock.now += 44_500;                       // inside the last second of its life
+  sweep();
+  check("fades as it nears expiry", bubbleFor(msg()), true);
+
+  f.sandbox.__togglePanel();                  // shut
+  f.sandbox.__togglePanel();                  // and reopen: full life again
+  check("reopening clears the fade", bubbleFor(msg()), false);
+  check("and the message is still there", f.sandbox.__messages().length, 1);
 }
 
 console.log(failures.length ? `\n${failures.length} failing` : "\nall passing");
