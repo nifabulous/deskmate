@@ -71,6 +71,9 @@ choice is remembered.
 - opencode adapter (plugin API)
 - Cursor adapter (agent hooks)
 - `deskmate notify` CLI for scripts, Makefiles, and CI
+- Transcript watcher: tail session logs (e.g. Claude Code JSONL) for
+  tools with no hook system, zero per-tool setup
+- MCP server mode, so agents can talk to the pet as a tool
 - One pet / bubble lane per agent session
 - More creatures and community skins (the sprite registry makes this a
   one-file change)
