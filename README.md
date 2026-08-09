@@ -55,6 +55,9 @@ Tauri bridge it runs a demo loop so you can iterate on animations.
   — copy one plugin file into opencode's plugin folder.
 - **Cursor** (beta): [adapters/cursor/README.md](adapters/cursor/README.md)
   — copy one hook script, merge one `hooks.json` snippet.
+- **Anything else**: `bin/deskmate-notify` is a tiny CLI for scripts,
+  Makefiles, and CI — `deskmate-notify -k task_done "Build finished"` —
+  or POST to the endpoint directly per [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Pet states
 
@@ -72,7 +75,6 @@ choice is remembered.
 
 ## Roadmap
 
-- `deskmate notify` CLI for scripts, Makefiles, and CI
 - Transcript watcher: tail session logs (e.g. Claude Code JSONL) for
   tools with no hook system, zero per-tool setup
 - MCP server mode, so agents can talk to the pet as a tool

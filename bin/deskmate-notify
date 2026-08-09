@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# deskmate-notify — send any event to deskmate from a shell.
+#
+#   deskmate-notify "Build finished"
+#   deskmate-notify -k task_start "Deploying" "prod cluster, 14 services"
+#   long-job.sh && deskmate-notify -k task_done "Job done" || deskmate-notify -k error "Job failed"
+#
+# Usage: deskmate-notify [-k kind] [-s source] TITLE [DETAIL]
+# Kinds: task_start | tool_use | task_done | error | notify | status
+# Env:   DESKMATE_PORT (default 8990)
+
+set -u
+
+kind="notify"
+source="cli"
+
+while getopts "k:s:h" opt; do
+  case "$opt" in
+    k) kind="$OPTARG" ;;
+    s) source="$OPTARG" ;;
+    h|*) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+title="${1:-}"
+detail="${2:-}"
+
+if [ -z "$title" ]; then
+  echo "usage: deskmate-notify [-k kind] [-s source] TITLE [DETAIL]" >&2
+  exit 1
+fi
+
+command -v curl >/dev/null 2>&1 || { echo "deskmate-notify: curl not found" >&2; exit 1; }
+
+PORT="${DESKMATE_PORT:-8990}"
+
+if command -v jq >/dev/null 2>&1; then
+  body="$(jq -n --arg s "$source" --arg k "$kind" --arg t "$title" --arg d "$detail" \
+    '{source: $s, kind: $k, title: $t, detail: $d}')"
+else
+  # Minimal fallback escaping (quotes and backslashes) when jq is absent.
+  esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  body="{\"source\":\"$(esc "$source")\",\"kind\":\"$(esc "$kind")\",\"title\":\"$(esc "$title")\",\"detail\":\"$(esc "$detail")\"}"
+fi
+
+curl -s -m 2 -X POST -H 'Content-Type: application/json' \
+  -d "$body" "http://127.0.0.1:${PORT}/event" >/dev/null 2>&1 \
+  || { echo "deskmate-notify: deskmate not reachable on port ${PORT}" >&2; exit 1; }

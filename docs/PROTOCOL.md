@@ -71,6 +71,5 @@ shell and is the reference implementation. Guidelines:
 3. Keep `title` short; put the rest in `detail`.
 4. Don't send secrets. Bubble text is drawn on screen.
 
-Shipped adapters: Claude Code (hooks), opencode (plugin), and Cursor
-(agent hooks, beta). Planned (contributions welcome): a `deskmate
-notify` CLI for scripts and CI.
+Shipped adapters: Claude Code (hooks), opencode (plugin), Cursor (agent
+hooks, beta), and the `bin/deskmate-notify` CLI for scripts and CI.
