@@ -98,6 +98,24 @@ rebuild, which needs a Rust toolchain just to pick up a bugfix. In order:
 
 **Everything else.**
 
+- Click a message to jump to the session that sent it. Blocked on a way
+  to focus a session, and the answer differs by how the agent is run:
+
+  - **In a terminal** this is doable now. The hook can capture
+    `$TERM_PROGRAM` plus `$ITERM_SESSION_ID` / `$TERM_SESSION_ID` and
+    send them with the event; focusing that tab is then a few lines of
+    AppleScript on macOS.
+  - **In the Claude desktop app** there is nothing to focus. None of
+    those variables are set, and the app's only relevant URL route,
+    `claude://resume`, imports a transcript into a new view rather than
+    focusing an already-open tab — its own error strings say so
+    (`code_deeplink_resume_import_failed`). The parameter format is
+    undocumented.
+
+  So this waits on a supported "focus this session" entry point. The
+  session id, `transcript_path`, and `cwd` already arrive with every
+  event, so the pet end is ready whenever the other end exists.
+
 - Transcript watcher: tail session logs (e.g. Claude Code JSONL) for
   tools with no hook system, zero per-tool setup
 - MCP server mode, so agents can talk to the pet as a tool
