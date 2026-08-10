@@ -466,6 +466,11 @@ petWrap.addEventListener("keydown", (e) => {
 
 window.addEventListener("mouseup", () => {
   if (pressOrigin && !dragging) togglePanel();
+  // Save where it was dropped, once, rather than on every move event during
+  // the drag. Without this the pet returns to the corner on every launch.
+  if (dragging && window.__TAURI__) {
+    window.__TAURI__.core.invoke("save_window_position").catch(() => {});
+  }
   pressOrigin = null;
   dragging = false;
 });

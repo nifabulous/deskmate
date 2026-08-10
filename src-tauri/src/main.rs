@@ -145,6 +145,50 @@ fn is_session_id(s: &str) -> bool {
     parts.next().is_none()
 }
 
+/// Remember where the pet was left. A desk pet gets put somewhere deliberately,
+/// and dropping it back in the corner on every launch throws that away.
+///
+/// Written when a drag ends rather than on every move event: a drag emits
+/// position updates continuously, and none of them are worth a file write.
+#[tauri::command]
+fn save_window_position(window: tauri::WebviewWindow) -> Result<(), String> {
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let path = position_file(window.app_handle()).ok_or("no config dir")?;
+    std::fs::write(path, format!(r#"{{"x":{},"y":{}}}"#, pos.x, pos.y)).map_err(|e| e.to_string())
+}
+
+fn position_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("position.json"))
+}
+
+/// Parse a saved position. Separate from the file read so the shape can be
+/// tested without a filesystem.
+fn parse_position(text: &str) -> Option<(i32, i32)> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let x = v.get("x")?.as_i64()?;
+    let y = v.get("y")?.as_i64()?;
+    // Anything outside i32 is not a screen coordinate, it is a corrupt file.
+    Some((i32::try_from(x).ok()?, i32::try_from(y).ok()?))
+}
+
+/// Would a window at this spot still be visible on one of the attached screens?
+///
+/// This matters more than it looks: the window has no taskbar entry and no
+/// decorations, so a pet restored onto a monitor that has since been unplugged
+/// is gone with no way to grab it back. Require a decent chunk of it to land on
+/// some monitor, or fall back to the default corner.
+fn is_on_screen(monitors: &[(i32, i32, u32, u32)], x: i32, y: i32, w: u32, h: u32) -> bool {
+    let need_w = (w as i32 / 2).max(1);
+    let need_h = (h as i32 / 2).max(1);
+    monitors.iter().any(|&(mx, my, mw, mh)| {
+        let overlap_w = (x + w as i32).min(mx + mw as i32) - x.max(mx);
+        let overlap_h = (y + h as i32).min(my + mh as i32) - y.max(my);
+        overlap_w >= need_w && overlap_h >= need_h
+    })
+}
+
 /// Where the pet sits inside the window, in logical pixels, as measured and
 /// reported by the webview. Everything outside it is made click-through.
 #[derive(Default)]
@@ -316,7 +360,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             startup_error,
             set_hit_region,
-            focus_session
+            focus_session,
+            save_window_position
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -343,23 +388,52 @@ fn main() {
             }
             tray.build(app)?;
 
-            // Nudge the pet toward the bottom-right corner on first launch.
+            // Put the pet back where it was left, or nudge it toward the
+            // bottom-right corner on a first launch.
             if let Some(window) = app.get_webview_window("main") {
-                if let Ok(Some(monitor)) = window.current_monitor() {
-                    let screen = monitor.size();
-                    // Window positions are global desktop coordinates, so offset
-                    // by the monitor's own origin — that is only (0, 0) on the
-                    // primary screen. Without it the pet lands on the wrong
-                    // monitor, or off-screen entirely, in a multi-monitor setup.
-                    let origin = monitor.position();
-                    // Fallback matches the window size in tauri.conf.json.
-                    let size = window.outer_size().unwrap_or(tauri::PhysicalSize {
-                        width: 220,
-                        height: 270,
-                    });
-                    let x = origin.x + screen.width.saturating_sub(size.width + 40) as i32;
-                    let y = origin.y + screen.height.saturating_sub(size.height + 80) as i32;
-                    let _ = window.set_position(tauri::PhysicalPosition { x, y });
+                let size = window.outer_size().unwrap_or(tauri::PhysicalSize {
+                    width: 220,
+                    height: 270,
+                });
+                let saved = position_file(app.handle())
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .and_then(|t| parse_position(&t));
+                let monitors: Vec<(i32, i32, u32, u32)> = window
+                    .available_monitors()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|m| {
+                        (
+                            m.position().x,
+                            m.position().y,
+                            m.size().width,
+                            m.size().height,
+                        )
+                    })
+                    .collect();
+
+                let restored = match saved {
+                    Some((x, y)) if is_on_screen(&monitors, x, y, size.width, size.height) => {
+                        window
+                            .set_position(tauri::PhysicalPosition { x, y })
+                            .is_ok()
+                    }
+                    _ => false,
+                };
+
+                if !restored {
+                    if let Ok(Some(monitor)) = window.current_monitor() {
+                        let screen = monitor.size();
+                        // Window positions are global desktop coordinates, so
+                        // offset by the monitor's own origin — that is only
+                        // (0, 0) on the primary screen. Without it the pet lands
+                        // on the wrong monitor, or off-screen entirely, in a
+                        // multi-monitor setup.
+                        let origin = monitor.position();
+                        let x = origin.x + screen.width.saturating_sub(size.width + 40) as i32;
+                        let y = origin.y + screen.height.saturating_sub(size.height + 80) as i32;
+                        let _ = window.set_position(tauri::PhysicalPosition { x, y });
+                    }
                 }
             }
             Ok(())
@@ -498,6 +572,61 @@ mod tests {
         assert!(validate(r#""a bare string""#).is_none());
         assert!(validate(r#"{"no_kind":true}"#).is_none());
         assert!(validate(r#"{"kind":7}"#).is_none());
+    }
+
+    #[test]
+    fn reads_back_a_saved_position() {
+        assert_eq!(parse_position(r#"{"x":1720,"y":900}"#), Some((1720, 900)));
+        // Negative coordinates are normal: a second monitor left of the primary.
+        assert_eq!(
+            parse_position(r#"{"x":-1280,"y":-200}"#),
+            Some((-1280, -200))
+        );
+    }
+
+    #[test]
+    fn a_corrupt_position_file_falls_back_rather_than_panicking() {
+        for bad in [
+            "",
+            "not json",
+            "{}",
+            r#"{"x":10}"#,
+            r#"{"x":"left","y":"top"}"#,
+            r#"{"x":99999999999999,"y":0}"#, // beyond i32: not a screen coordinate
+        ] {
+            assert_eq!(parse_position(bad), None, "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn refuses_to_restore_onto_a_monitor_that_is_gone() {
+        // One 1920x1080 screen at the origin.
+        let monitors = [(0, 0, 1920u32, 1080u32)];
+        let (w, h) = (220u32, 270u32);
+
+        assert!(
+            is_on_screen(&monitors, 1660, 730, w, h),
+            "bottom-right corner"
+        );
+        assert!(is_on_screen(&monitors, 0, 0, w, h), "top-left corner");
+        // Half on, half off is still grabbable.
+        assert!(
+            is_on_screen(&monitors, 1810, 500, w, h),
+            "hanging off the right"
+        );
+
+        // The case that matters: saved on a second monitor, now unplugged. The
+        // window has no taskbar entry, so restoring here loses the pet for good.
+        assert!(
+            !is_on_screen(&monitors, 2400, 300, w, h),
+            "off to the right"
+        );
+        assert!(
+            !is_on_screen(&monitors, -1200, 100, w, h),
+            "off to the left"
+        );
+        assert!(!is_on_screen(&monitors, 300, 1050, w, h), "mostly below");
+        assert!(!is_on_screen(&[], 100, 100, w, h), "no monitors at all");
     }
 
     #[test]
