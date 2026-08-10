@@ -145,16 +145,38 @@ fn is_session_id(s: &str) -> bool {
     parts.next().is_none()
 }
 
+/// The newest position seen, and when it was seen. A drag emits move events
+/// continuously, so rather than writing a file per event, the cursor watcher
+/// flushes this once the position has stopped changing.
+#[derive(Default)]
+struct PendingPosition(Mutex<Option<(i32, i32, std::time::Instant)>>);
+
+/// How long the position must hold still before it counts as "dropped there".
+const POSITION_SETTLE: Duration = Duration::from_millis(500);
+
 /// Remember where the pet was left. A desk pet gets put somewhere deliberately,
 /// and dropping it back in the corner on every launch throws that away.
 ///
-/// Written when a drag ends rather than on every move event: a drag emits
-/// position updates continuously, and none of them are worth a file write.
-#[tauri::command]
-fn save_window_position(window: tauri::WebviewWindow) -> Result<(), String> {
-    let pos = window.outer_position().map_err(|e| e.to_string())?;
-    let path = position_file(window.app_handle()).ok_or("no config dir")?;
-    std::fs::write(path, format!(r#"{{"x":{},"y":{}}}"#, pos.x, pos.y)).map_err(|e| e.to_string())
+/// This deliberately does NOT hang off the webview's mouseup. Once
+/// `startDragging()` hands the drag to the OS, the webview may never see the
+/// release at all — the pointer handler right above says as much — so a save on
+/// mouseup would quietly never fire for exactly the drags it exists to record.
+/// The window's own move events cannot be missed that way.
+fn save_position(app: &AppHandle, x: i32, y: i32) {
+    if let Some(path) = position_file(app) {
+        let _ = std::fs::write(path, format!(r#"{{"x":{x},"y":{y}}}"#));
+    }
+}
+
+/// Has the pet stopped moving long enough to write where it landed?
+fn settled(
+    pending: Option<(i32, i32, std::time::Instant)>,
+    now: std::time::Instant,
+) -> Option<(i32, i32)> {
+    match pending {
+        Some((x, y, at)) if now.duration_since(at) >= POSITION_SETTLE => Some((x, y)),
+        _ => None,
+    }
 }
 
 fn position_file(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -182,9 +204,13 @@ fn parse_position(text: &str) -> Option<(i32, i32)> {
 fn is_on_screen(monitors: &[(i32, i32, u32, u32)], x: i32, y: i32, w: u32, h: u32) -> bool {
     let need_w = (w as i32 / 2).max(1);
     let need_h = (h as i32 / 2).max(1);
+    // Saturating throughout: a corrupt file can hand us coordinates near
+    // i32::MAX, and plain addition would panic in debug or wrap in release —
+    // wrapping being the worse outcome, since it could make an absurd position
+    // look on-screen and strand the pet where it cannot be grabbed.
     monitors.iter().any(|&(mx, my, mw, mh)| {
-        let overlap_w = (x + w as i32).min(mx + mw as i32) - x.max(mx);
-        let overlap_h = (y + h as i32).min(my + mh as i32) - y.max(my);
+        let overlap_w = x.saturating_add(w as i32).min(mx.saturating_add(mw as i32)) - x.max(mx);
+        let overlap_h = y.saturating_add(h as i32).min(my.saturating_add(mh as i32)) - y.max(my);
         overlap_w >= need_w && overlap_h >= need_h
     })
 }
@@ -209,6 +235,17 @@ fn run_cursor_watcher(app: AppHandle) {
 
     loop {
         thread::sleep(Duration::from_millis(60));
+
+        // Piggyback the position flush on this tick rather than spawning a
+        // second thread to do nothing 16 times a second.
+        if let Some(state) = app.try_state::<PendingPosition>() {
+            if let Ok(mut slot) = state.0.lock() {
+                if let Some((x, y)) = settled(*slot, std::time::Instant::now()) {
+                    save_position(&app, x, y);
+                    *slot = None;
+                }
+            }
+        }
 
         let Some(window) = app.get_webview_window("main") else {
             continue;
@@ -379,11 +416,22 @@ fn main() {
     tauri::Builder::default()
         .manage(StartupError::default())
         .manage(HitRegion::default())
+        .manage(PendingPosition::default())
+        // Window move events, not the webview's mouseup: once startDragging()
+        // hands the drag to the OS the webview may never see the release.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Moved(pos) = event {
+                if let Some(state) = window.try_state::<PendingPosition>() {
+                    if let Ok(mut slot) = state.0.lock() {
+                        *slot = Some((pos.x, pos.y, std::time::Instant::now()));
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             startup_error,
             set_hit_region,
-            focus_session,
-            save_window_position
+            focus_session
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -649,6 +697,35 @@ mod tests {
         );
         assert!(!is_on_screen(&monitors, 300, 1050, w, h), "mostly below");
         assert!(!is_on_screen(&[], 100, 100, w, h), "no monitors at all");
+    }
+
+    #[test]
+    fn only_saves_once_the_pet_has_stopped_moving() {
+        let now = std::time::Instant::now();
+        let mid_drag = now - Duration::from_millis(100);
+        let dropped = now - Duration::from_millis(600);
+
+        // A drag emits move events continuously; writing a file per event is
+        // what this debounce exists to avoid.
+        assert_eq!(settled(Some((10, 20, mid_drag)), now), None);
+        assert_eq!(settled(Some((10, 20, dropped)), now), Some((10, 20)));
+        assert_eq!(settled(None, now), None);
+    }
+
+    #[test]
+    fn absurd_coordinates_cannot_overflow_the_screen_check() {
+        let monitors = [(0, 0, 1920u32, 1080u32)];
+        // Near i32::MAX these additions used to wrap, which is worse than a
+        // panic: a wrapped value can look on-screen and strand the pet.
+        assert!(!is_on_screen(&monitors, i32::MAX - 5, 0, 220, 270));
+        assert!(!is_on_screen(&monitors, 0, i32::MAX - 5, 220, 270));
+        assert!(!is_on_screen(
+            &monitors,
+            i32::MIN + 5,
+            i32::MIN + 5,
+            220,
+            270
+        ));
     }
 
     #[test]
