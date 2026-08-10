@@ -48,7 +48,8 @@ function makeNode() {
     remove() { if (node.parentNode) node.parentNode.removeChild(node); },
     querySelector() { return null; },
     getContext: () => ctxStub,
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 84, height: 90 }),
+    rect: { left: 0, top: 0, right: 84, bottom: 90, width: 84, height: 90 },
+    getBoundingClientRect: () => node.rect,
     width: 84, height: 90, scrollHeight: 0, clientHeight: 0,
   };
   created.push(node);
@@ -60,6 +61,7 @@ const ctxStub = new Proxy({}, { get: () => () => {}, set: () => true });
 const html = fs.readFileSync(UI, "utf8");
 let code = html.slice(html.indexOf("<script>") + 8, html.lastIndexOf("</script>"));
 code = code.replace(/requestAnimationFrame\(tick\);/g, "");
+code += "\nglobalThis.publishHitRegion = publishHitRegion;";
 
 const sandbox = {
   console: { log() {}, error() {} },
@@ -151,6 +153,26 @@ check("fades the top edge when messages are hidden above", logEl.classList.conta
 logEl.scrollHeight = 90;
 sandbox.handleEvent({ kind: "tool_use", source: "claude-code", title: "Fits", detail: "x" });
 check("no fade when everything fits", logEl.classList.contains("clipped"), false);
+
+// The window is click-through except over the reported hit region. #app spans
+// the full window width whatever is inside it, so reporting its box blocked
+// clicks in a wide band either side of the pet, with nothing drawn there.
+// Real geometry in a 220x270 window:
+byId.petwrap.rect = { left: 68, top: 174, right: 152, bottom: 264, width: 84, height: 90 };
+byId.log.rect = { left: 6, top: 24, right: 214, bottom: 174, width: 208, height: 150 };
+// #app deliberately absent: the fix stops consulting it, so it is never looked up.
+
+const lastRegion = () => [...invokes].reverse().find((c) => c.name === "set_hit_region")?.args;
+
+byId.log.hidden = true;
+sandbox.publishHitRegion();
+check("panel shut: hit region is just the pet, not the full width",
+  JSON.stringify(lastRegion()), JSON.stringify({ x: 68, y: 174, w: 84, h: 90 }));
+
+byId.log.hidden = false;
+sandbox.publishHitRegion();
+check("panel open: hit region covers panel and pet together",
+  JSON.stringify(lastRegion()), JSON.stringify({ x: 6, y: 24, w: 208, h: 240 }));
 
 console.log(failures.length ? `\n${failures.length} failing` : "\nall passing");
 process.exit(failures.length ? 1 : 0);

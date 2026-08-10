@@ -735,11 +735,22 @@ function handleEvent(e) {
 // actually is; the Rust side watches the cursor and makes the rest of the
 // window click-through.
 function publishHitRegion() {
-  // #app is exactly the visible content: the pet alone when the panel is shut,
-  // pet plus panel when it is open. Everything outside stays click-through.
-  const r = document.getElementById("app").getBoundingClientRect();
+  // #app is NOT the visible content. It is pinned left:6 right:6, so its box is
+  // the full window width whatever is inside it — only its height tracks the
+  // content. Reporting that box left roughly 60px of invisible click-blocking
+  // either side of an 84px pet, swallowing clicks meant for whatever sits
+  // underneath. Report the union of the things actually drawn instead.
+  const boxes = [document.getElementById("petwrap").getBoundingClientRect()];
+  const log = document.getElementById("log");
+  if (!log.hidden) boxes.push(log.getBoundingClientRect());
+
+  const left = Math.min(...boxes.map((b) => b.left));
+  const top = Math.min(...boxes.map((b) => b.top));
+  const width = Math.max(...boxes.map((b) => b.right)) - left;
+  const height = Math.max(...boxes.map((b) => b.bottom)) - top;
+
   window.__TAURI__.core
-    .invoke("set_hit_region", { x: r.left, y: r.top, w: r.width, h: r.height })
+    .invoke("set_hit_region", { x: left, y: top, w: width, h: height })
     .catch(() => { /* older build without the command: window stays solid */ });
 }
 
