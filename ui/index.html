@@ -525,7 +525,9 @@ function laneOf(source, session) {
     color: laneColors.get(id),
     // Short enough to sit next to the title without crowding it; the full
     // source and id go in the tooltip.
-    tag: session ? session.slice(-4) : source,
+    // Coerce rather than trust: the server rejects non-string fields now, but a
+    // throw in here loses the message entirely, so degrade instead of dying.
+    tag: session ? String(session).slice(-4) : String(source || ""),
     title: [source, session].filter(Boolean).join(" · ") || "unknown source",
   };
 }

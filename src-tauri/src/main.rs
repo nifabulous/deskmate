@@ -208,12 +208,27 @@ fn event_port() -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
-/// Minimal validation: must be a JSON object with a string `kind`.
-/// Everything else is passed through so adapters can evolve freely.
+/// Fields the webview reads as strings. `session` is the sharp one: the UI
+/// calls `.slice()` on it, so a number threw inside the event listener and the
+/// message vanished — after this server had already answered 200. Anything the
+/// UI would choke on has to be a 400 here, or the sender is told it worked.
+const STRING_FIELDS: [&str; 4] = ["source", "session", "title", "detail"];
+
+/// Minimal validation: a JSON object with a string `kind`, plus string types on
+/// the optional fields above. Unknown keys still pass through untouched so
+/// adapters can evolve freely.
 fn validate(body: &str) -> Option<serde_json::Value> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     let obj = value.as_object()?;
     obj.get("kind")?.as_str()?;
+    for field in STRING_FIELDS {
+        match obj.get(field) {
+            // Absent or explicitly null is fine; the UI guards for both.
+            None | Some(serde_json::Value::Null) => {}
+            Some(v) if v.is_string() => {}
+            Some(_) => return None,
+        }
+    }
     Some(value)
 }
 
@@ -261,13 +276,20 @@ fn run_event_server(app: AppHandle) {
                     .read_to_string(&mut body)
                     .is_ok();
                 match (ok, validate(&body)) {
-                    (true, Some(event)) => {
-                        // Forward to every window (there is only one).
-                        if let Err(e) = app.emit("deskmate:event", &event) {
+                    // Forward to every window (there is only one). Answering 200
+                    // after a failed emit tells the sender the pet heard it when
+                    // nothing was delivered.
+                    (true, Some(event)) => match app.emit("deskmate:event", &event) {
+                        Ok(()) => (200, r#"{"ok":true}"#.to_string()),
+                        Err(e) => {
                             eprintln!("deskmate: emit failed: {e}");
+                            (
+                                500,
+                                r#"{"ok":false,"error":"deskmate could not deliver the event"}"#
+                                    .to_string(),
+                            )
                         }
-                        (200, r#"{"ok":true}"#.to_string())
-                    }
+                    },
                     _ => (
                         400,
                         r#"{"ok":false,"error":"body must be a JSON object with a string `kind`"}"#
@@ -443,6 +465,39 @@ mod tests {
             Some("bfb84bd4-b900-41b7-8c45-efdcfa7d653b".to_string())
         );
         let _ = std::fs::remove_dir_all(&store);
+    }
+
+    #[test]
+    fn accepts_the_events_adapters_actually_send() {
+        assert!(validate(r#"{"kind":"task_start"}"#).is_some());
+        assert!(validate(
+            r#"{"kind":"tool_use","source":"claude-code","session":"c247fe2e-aaa2-4084-98b1-ddc4acc461e0","title":"Editing","detail":"src/main.rs"}"#
+        )
+        .is_some());
+        // Null and unknown keys are fine — the UI guards for absent fields, and
+        // passing extra keys through is what lets adapters evolve.
+        assert!(validate(r#"{"kind":"notify","session":null,"future_field":42}"#).is_some());
+    }
+
+    #[test]
+    fn rejects_events_the_ui_would_choke_on() {
+        // The bug this exists for: a numeric session threw `session.slice is not
+        // a function` inside the UI listener, so the message never appeared —
+        // and the sender had already been told 200.
+        assert!(validate(r#"{"kind":"tool_use","session":12345}"#).is_none());
+        assert!(validate(r#"{"kind":"tool_use","title":{"nested":"object"}}"#).is_none());
+        assert!(validate(r#"{"kind":"tool_use","detail":["an","array"]}"#).is_none());
+        assert!(validate(r#"{"kind":"tool_use","source":false}"#).is_none());
+    }
+
+    #[test]
+    fn rejects_bodies_that_are_not_events() {
+        assert!(validate("").is_none());
+        assert!(validate("not json at all").is_none());
+        assert!(validate("[1,2,3]").is_none());
+        assert!(validate(r#""a bare string""#).is_none());
+        assert!(validate(r#"{"no_kind":true}"#).is_none());
+        assert!(validate(r#"{"kind":7}"#).is_none());
     }
 
     #[test]
