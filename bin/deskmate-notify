@@ -39,11 +39,43 @@ if command -v jq >/dev/null 2>&1; then
   body="$(jq -n --arg s "$source" --arg k "$kind" --arg t "$title" --arg d "$detail" \
     '{source: $s, kind: $k, title: $t, detail: $d}')"
 else
-  # Minimal fallback escaping (quotes and backslashes) when jq is absent.
-  esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  # Fallback for machines without jq. A raw newline or tab is not legal inside a
+  # JSON string, so escaping only quotes and backslashes built invalid JSON the
+  # moment a title spanned two lines — and the server rejected the whole event.
+  # Order matters: backslash and quote first, so the escapes added below are not
+  # escaped again.
+  # One awk pass, walking bytes. sed and tr disagree across GNU and BSD about
+  # escapes like \t and \001, and getting that wrong here silently corrupts the
+  # message rather than failing loudly. Bytes above 127 pass through untouched,
+  # so UTF-8 survives.
+  esc() {
+    printf '%s' "$1" | LC_ALL=C awk '
+      BEGIN { ORS = ""; for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i }
+      {
+        if (NR > 1) printf "\\n"
+        for (i = 1; i <= length($0); i++) {
+          c = substr($0, i, 1)
+          if (c == "\\") printf "\\\\"
+          else if (c == "\"") printf "\\\""
+          else if (c == "\t") printf "\\t"
+          else if (ord[c] > 0 && ord[c] < 32) printf "\\u%04x", ord[c]
+          else printf "%s", c
+        }
+      }
+    '
+  }
   body="{\"source\":\"$(esc "$source")\",\"kind\":\"$(esc "$kind")\",\"title\":\"$(esc "$title")\",\"detail\":\"$(esc "$detail")\"}"
 fi
 
-curl -s -m 2 -X POST -H 'Content-Type: application/json' \
-  -d "$body" "http://127.0.0.1:${PORT}/event" >/dev/null 2>&1 \
-  || { echo "deskmate-notify: deskmate not reachable on port ${PORT}" >&2; exit 1; }
+# curl exits 0 on a 4xx, so the old `|| echo unreachable` never fired for a
+# rejected event: the script reported success while deskmate dropped it on the
+# floor. Read the status instead, and say which of the two actually happened.
+code="$(curl -s -o /dev/null -w '%{http_code}' -m 2 -X POST \
+  -H 'Content-Type: application/json' \
+  -d "$body" "http://127.0.0.1:${PORT}/event" 2>/dev/null)" || code="000"
+
+case "$code" in
+  2??) ;;
+  000|"") echo "deskmate-notify: deskmate not reachable on port ${PORT}" >&2; exit 1 ;;
+  *) echo "deskmate-notify: deskmate rejected the event (HTTP ${code})" >&2; exit 1 ;;
+esac
