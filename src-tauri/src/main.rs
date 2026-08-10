@@ -351,6 +351,28 @@ fn run_event_server(app: AppHandle) {
             .with_header(header);
         let _ = request.respond(response);
     }
+
+    // Falling out of that loop means the listener is gone. Nothing restarts it,
+    // so without this the pet sits there looking perfectly alive while every
+    // event posted to it disappears. Only bind failure was reported before, and
+    // the webview reads that once at load — too early to ever see this. Put it
+    // where the user is actually looking: on the pet.
+    let message = format!("deskmate stopped listening on port {port}. Restart it to reconnect.");
+    eprintln!("deskmate: {message}");
+    if let Some(state) = app.try_state::<StartupError>() {
+        if let Ok(mut slot) = state.0.lock() {
+            *slot = Some(message.clone());
+        }
+    }
+    let _ = app.emit(
+        "deskmate:event",
+        serde_json::json!({
+            "kind": "error",
+            "source": "deskmate",
+            "title": "Stopped listening",
+            "detail": message,
+        }),
+    );
 }
 
 fn main() {
