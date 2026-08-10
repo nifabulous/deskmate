@@ -26,10 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: UI regression tests
+      - name: UI and CLI regression tests
         run: |
           node test/pet-timers.test.js
           node test/focus-session.test.js
+          test/notify-cli.test.sh
 
       - name: Tag matches the version in tauri.conf.json
         if: startsWith(github.ref, 'refs/tags/v')
